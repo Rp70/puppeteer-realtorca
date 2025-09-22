@@ -42,6 +42,15 @@ const CONFIG = {
     },
     API_URL: 'https://api2.realtor.ca/Listing.svc/PropertySearch_Post',
     OUTPUT_FILE: 'realtor_listings_perfect.json',
+    getBackupFileName: () => {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        const hh = String(now.getHours()).padStart(2, '0');
+        const ii = String(now.getMinutes()).padStart(2, '0');
+        return `realtor_listings_perfect.${yyyy}-${mm}-${dd}-${hh}-${ii}.json`;
+    },
     USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     TIMEOUT_MS: 60000, // For navigation and waiting for response
     SLEEP_BETWEEN_PAGES_MS: 60000, // 60 seconds delay between pages to be respectful to the server
@@ -173,10 +182,28 @@ async function saveData(data, filePath, isFirstPage = false) {
       console.log(`Total listings so far: ${allData.Results?.length || 0}`);
 }
 
-// 5. Main Orchestration Function
+// 5. Backup Function
+async function createBackup(originalFile, backupFile) {
+    try {
+        const existingContent = await fs.readFile(originalFile, 'utf8');
+        await fs.writeFile(backupFile, existingContent, 'utf8');
+        console.log(`Backup created: ${backupFile}`);
+        return true;
+    } catch (error) {
+        console.log(`No existing file to backup or backup failed: ${error.message}`);
+        return false;
+    }
+}
+
+// 6. Main Orchestration Function
 async function main() {
      console.log("Script start.");
      let browser;
+     
+     // Create backup of existing file before starting
+     const backupFileName = CONFIG.getBackupFileName();
+     await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
+     
      try {
         console.log(`Launching browser (Headless: ${CONFIG.HEADLESS})...`);
         // ADDED DEBUG LINE:
