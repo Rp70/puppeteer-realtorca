@@ -11,8 +11,13 @@ let currentPage = 0; // Track current page number
 const CONFIG = {
     MAP_URL: () => {
         const baseUrl = 'https://www.realtor.ca/map#';
+        const maxPages = 50;
 
         currentPage += 1; // Increment page number on each call
+        if (currentPage > maxPages) {
+            console.log(`Reached max page limit of ${maxPages}. Stopping.`);
+            return null; // Signal to stop further processing
+        }
         console.log(`Generating URL for page ${currentPage}`);
         
         const params = {
