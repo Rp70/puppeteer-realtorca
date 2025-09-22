@@ -4,7 +4,7 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('node:fs/promises'); // Use promise version
 const geoNames = require('./config/geoNames');
 const transactionTypeIds = [
-    1, // For sale
+    2, // For sale
     5, // Sold
 ]
 
