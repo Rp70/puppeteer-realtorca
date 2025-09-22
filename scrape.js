@@ -5,15 +5,43 @@ const fs = require('node:fs/promises'); // Use promise version
 
 puppeteer.use(StealthPlugin());
 
+let currentPage = 0; // Track current page number
+
 // 2. Central Configuration
 const CONFIG = {
-    MAP_URL: 'https://www.realtor.ca/map#view=list&Sort=6-D&GeoIds=g30_c3nfkdtg&GeoName=Calgary%2C%20AB&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=3&NumberOfDays=1&OwnershipTypeGroupId=2&Currency=CAD',
+    MAP_URL: () => {
+        const baseUrl = 'https://www.realtor.ca/map#';
+
+        currentPage += 1; // Increment page number on each call
+        console.log(`Generating URL for page ${currentPage}`);
+        
+        const params = {
+            LatitudeMax: '49.56997',
+            LongitudeMax: '-122.40807',
+            LatitudeMin: '49.00206',
+            LongitudeMin: '-123.71483',
+            view: 'list',
+            CurrentPage: currentPage.toString(), // Use the currentPage variable
+            Sort: '6-D',
+            PGeoIds: 'g40_c2b84pnz',
+            GeoName: 'Metro Vancouver, BC',
+            PropertyTypeGroupID: '1',
+            TransactionTypeId: '2',
+            PropertySearchTypeId: '0',
+            Currency: 'CAD',
+
+        }
+
+        const queryString = new URLSearchParams(params).toString();
+        return `${baseUrl}${queryString}`;
+    },
     API_URL: 'https://api2.realtor.ca/Listing.svc/PropertySearch_Post',
     OUTPUT_FILE: 'realtor_listings_perfect.json',
     USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     TIMEOUT_MS: 60000, // For navigation and waiting for response
     HEADLESS: false, // true = faster, no UI. false = slower, visual, better for debug/evasion.
-    EXECUTABLE_PATH: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // <<-- THIS IS NOW UNCOMMENTED
+    // EXECUTABLE_PATH: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // <<-- THIS IS NOW UNCOMMENTED
+    EXECUTABLE_PATH: '/usr/bin/google-chrome-stable', // Standard path if installed via apt in Docker
     BLOCKED_RESOURCE_TYPES: ['image', 'media', 'font', 'stylesheet', 'other'], // Efficiency: block non essential
     BLOCKED_URL_PATTERNS: ['.css', 'google-analytics', 'googletagmanager', 'doubleclick', 'scorecardresearch', 'youtube', 'intergient'], // Efficiency
 };
@@ -49,8 +77,9 @@ async function runScraper(browser) {
          { timeout: CONFIG.TIMEOUT_MS }
      );
 
-     console.log(`Navigating to: ${CONFIG.MAP_URL}`);
-      await page.goto(CONFIG.MAP_URL, {
+     const mapUrl = typeof CONFIG.MAP_URL === 'function' ? CONFIG.MAP_URL() : CONFIG.MAP_URL;
+     console.log(`Navigating to: ${mapUrl}`);
+      await page.goto(mapUrl, {
           waitUntil: 'networkidle0', // Efficiency: Wait only for essential network calls
          timeout: CONFIG.TIMEOUT_MS,
       });
