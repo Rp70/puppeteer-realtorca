@@ -52,7 +52,7 @@ const CONFIG = {
 };
 
 // 3. Core Logic Function
-async function runScraper(browser) {
+async function runScraper(browser, mapUrl) {
      console.log("Setting up page...");
      const page = await browser.newPage();
      await page.setUserAgent(CONFIG.USER_AGENT);
@@ -82,7 +82,6 @@ async function runScraper(browser) {
          { timeout: CONFIG.TIMEOUT_MS }
      );
 
-     const mapUrl = typeof CONFIG.MAP_URL === 'function' ? CONFIG.MAP_URL() : CONFIG.MAP_URL;
      console.log(`Navigating to: ${mapUrl}`);
       await page.goto(mapUrl, {
           waitUntil: 'networkidle0', // Efficiency: Wait only for essential network calls
@@ -105,19 +104,72 @@ async function runScraper(browser) {
 
        const data = await response.json(); // Throws if JSON is invalid
        console.log("API response JSON parsed.");
+       
+       // Check for stopping conditions
+       if (data.Paging && data.Paging.RecordsPerPage === 0) {
+           console.log("API returned Paging.RecordsPerPage=0. No more records available.");
+           await page.close();
+           return { ...data, shouldStop: true };
+       }
+       
+       if (data.ErrorCode && data.ErrorCode.Id === 400) {
+           console.log("API returned ErrorCode.Id=400. Stopping due to error.");
+           await page.close();
+           return { ...data, shouldStop: true };
+       }
+       
+       // Close the page to free memory
+       await page.close();
+       
        return data;
 }
 
 // 4. Data Saving Function
-async function saveData(data, filePath) {
+async function saveData(data, filePath, isFirstPage = false) {
      if (!data) {
          console.warn("No data to save.");
          return;
      }
+     
+     let allData = {};
+     
+     // Check if file exists and read existing data (unless it's the first page)
+     if (!isFirstPage) {
+         try {
+             const existingContent = await fs.readFile(filePath, 'utf8');
+             allData = JSON.parse(existingContent);
+         } catch (error) {
+             // File doesn't exist or invalid JSON, start with empty structure
+             console.log("Starting with new data file or file doesn't exist");
+             allData = { Results: [], ...data };
+             // Remove Results from data to avoid duplication
+             delete allData.Results;
+             allData.Results = [];
+         }
+     } else {
+         // First page, start fresh
+         allData = { ...data };
+         allData.Results = [];
+     }
+     
+     // Append new results to existing ones
+     if (data.Results && Array.isArray(data.Results)) {
+         allData.Results = allData.Results || [];
+         allData.Results.push(...data.Results);
+         
+         // Update other properties from the latest response
+         Object.keys(data).forEach(key => {
+             if (key !== 'Results') {
+                 allData[key] = data[key];
+             }
+         });
+     }
+     
       // Best Practice: Async file IO
-      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+      await fs.writeFile(filePath, JSON.stringify(allData, null, 2), 'utf8');
       console.log(`Data saved: ${filePath}`);
-       console.log(`Listings found: ${data.Results?.length || 0}`);
+      console.log(`New listings in this page: ${data.Results?.length || 0}`);
+      console.log(`Total listings so far: ${allData.Results?.length || 0}`);
 }
 
 // 5. Main Orchestration Function
@@ -134,8 +186,54 @@ async function main() {
             args: ['--no-sandbox', '--disable-setuid-sandbox'],
             ignoreHTTPSErrors: true,
         });
-        const data = await runScraper(browser);
-        await saveData(data, CONFIG.OUTPUT_FILE);
+        
+        let isFirstPage = true;
+        
+        // Loop until CONFIG.MAP_URL returns null (when it's a function)
+        while (true) {
+            const mapUrl = typeof CONFIG.MAP_URL === 'function' ? CONFIG.MAP_URL() : CONFIG.MAP_URL;
+            
+            // If CONFIG.MAP_URL is a function and returns null, break the loop
+            if (mapUrl === null) {
+                console.log("CONFIG.MAP_URL returned null. Stopping pagination.");
+                break;
+            }
+            
+            // If CONFIG.MAP_URL is not a function, run once and break
+            if (typeof CONFIG.MAP_URL !== 'function' && !isFirstPage) {
+                console.log("CONFIG.MAP_URL is not a function. Running single page scrape.");
+                break;
+            }
+            
+            console.log(`\n--- Processing ${isFirstPage ? 'first' : 'next'} page ---`);
+            const data = await runScraper(browser, mapUrl);
+            
+            // Check if we should stop based on API response conditions
+            if (data.shouldStop) {
+                console.log("Stopping pagination due to API response conditions.");
+                // Save data even if we're stopping (might have some results)
+                if (data.Results && data.Results.length > 0) {
+                    // Remove the shouldStop flag before saving
+                    const { shouldStop, ...dataToSave } = data;
+                    await saveData(dataToSave, CONFIG.OUTPUT_FILE, isFirstPage);
+                }
+                break;
+            }
+            
+            await saveData(data, CONFIG.OUTPUT_FILE, isFirstPage);
+            
+            isFirstPage = false;
+            
+            // If CONFIG.MAP_URL is not a function, break after first iteration
+            if (typeof CONFIG.MAP_URL !== 'function') {
+                break;
+            }
+            
+            // Add a small delay between pages to be respectful to the server
+            console.log("Waiting 2 seconds before next page...");
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
         console.log("Script success.");
 
     } catch (error) {
