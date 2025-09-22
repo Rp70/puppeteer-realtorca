@@ -198,3 +198,5 @@ export default geoNames = [
     },
     
 ];
+
+module.exports = geoNames;
