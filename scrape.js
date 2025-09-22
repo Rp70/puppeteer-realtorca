@@ -165,7 +165,29 @@ async function saveData(data, filePath, isFirstPage = false) {
      // Append new results to existing ones
      if (data.Results && Array.isArray(data.Results)) {
          allData.Results = allData.Results || [];
-         allData.Results.push(...data.Results);
+         
+         // Create a Map for efficient deduplication by Id
+         const resultsMap = new Map();
+         
+         // First, add all existing results to the map
+         allData.Results.forEach(result => {
+             if (result.Id) {
+                 resultsMap.set(result.Id, result);
+             }
+         });
+         
+         // Then add/update with new results (this will overwrite duplicates with newer data)
+         data.Results.forEach(result => {
+             if (result.Id) {
+                 resultsMap.set(result.Id, result);
+             }
+         });
+         
+         // Convert map back to array
+         allData.Results = Array.from(resultsMap.values());
+         
+         console.log(`New listings in this page: ${data.Results?.length || 0}`);
+         console.log(`Unique listings after deduplication: ${allData.Results?.length || 0}`);
          
          // Update other properties from the latest response
          Object.keys(data).forEach(key => {
@@ -178,8 +200,7 @@ async function saveData(data, filePath, isFirstPage = false) {
       // Best Practice: Async file IO
       await fs.writeFile(filePath, JSON.stringify(allData, null, 2), 'utf8');
       console.log(`Data saved: ${filePath}`);
-      console.log(`New listings in this page: ${data.Results?.length || 0}`);
-      console.log(`Total listings so far: ${allData.Results?.length || 0}`);
+      console.log(`Total unique listings so far: ${allData.Results?.length || 0}`);
 }
 
 // 5. Backup Function
