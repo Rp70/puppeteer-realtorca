@@ -2,10 +2,18 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('node:fs/promises'); // Use promise version
+const geoNames = require('./config/geoNames');
+const transactionTypeIds = [
+    1, // For sale
+    5, // Sold
+]
 
 puppeteer.use(StealthPlugin());
 
-let currentPage = 0; // Track current page number
+// State tracking for nested loops
+let currentTransactionIndex = 0;
+let currentGeoIndex = 0;
+let currentPage = 0;
 
 // 2. Central Configuration
 const CONFIG = {
@@ -13,28 +21,48 @@ const CONFIG = {
         const baseUrl = 'https://www.realtor.ca/map#';
         const maxPages = 50;
 
-        currentPage += 1; // Increment page number on each call
+        // Increment page
+        currentPage += 1;
+        
+        // Check if we need to move to next geo area
         if (currentPage > maxPages) {
-            console.log(`Reached max page limit of ${maxPages}. Stopping.`);
-            return null; // Signal to stop further processing
+            currentPage = 1;
+            currentGeoIndex += 1;
+            
+            // Check if we need to move to next transaction type
+            if (currentGeoIndex >= geoNames.length) {
+                currentGeoIndex = 0;
+                currentTransactionIndex += 1;
+                
+                // Check if we're done with all combinations
+                if (currentTransactionIndex >= transactionTypeIds.length) {
+                    console.log(`Completed all combinations. Stopping.`);
+                    return null; // Signal to stop further processing
+                }
+            }
         }
-        console.log(`Generating URL for page ${currentPage}`);
+        
+        const currentTransactionId = transactionTypeIds[currentTransactionIndex];
+        const currentGeo = geoNames[currentGeoIndex];
+        
+        console.log(`Generating URL for Transaction: ${currentTransactionId}, Geo: ${currentGeo.GeoName}, Page: ${currentPage}`);
         
         const params = {
-            LatitudeMax: '49.56997',
-            LongitudeMax: '-122.40807',
-            LatitudeMin: '49.00206',
-            LongitudeMin: '-123.71483',
+            ZoomLevel: '11',
+            Center: currentGeo.Center,
+            LatitudeMax: currentGeo.LatitudeMax,
+            LongitudeMax: currentGeo.LongitudeMax,
+            LatitudeMin: currentGeo.LatitudeMin,
+            LongitudeMin: currentGeo.LongitudeMin,
             view: 'list',
-            ...( currentPage > 1 ? { CurrentPage: currentPage.toString()} : {} ), // Use the currentPage variable
+            ...( currentPage > 1 ? { CurrentPage: currentPage.toString()} : {} ),
             Sort: '6-D',
-            PGeoIds: 'g40_c2b84pnz',
-            GeoName: 'Metro Vancouver, BC',
+            PGeoIds: currentGeo.PGeoIds,
+            GeoName: currentGeo.GeoName,
             PropertyTypeGroupID: '1',
-            TransactionTypeId: '2',
+            TransactionTypeId: currentTransactionId.toString(),
             PropertySearchTypeId: '0',
             Currency: 'CAD',
-
         }
 
         const queryString = new URLSearchParams(params).toString();
