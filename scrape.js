@@ -44,6 +44,7 @@ const CONFIG = {
     OUTPUT_FILE: 'realtor_listings_perfect.json',
     USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     TIMEOUT_MS: 60000, // For navigation and waiting for response
+    SLEEP_BETWEEN_PAGES_MS: 60000, // 60 seconds delay between pages to be respectful to the server
     HEADLESS: false, // true = faster, no UI. false = slower, visual, better for debug/evasion.
     // EXECUTABLE_PATH: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // <<-- THIS IS NOW UNCOMMENTED
     EXECUTABLE_PATH: '/usr/bin/google-chrome-stable', // Standard path if installed via apt in Docker
@@ -230,8 +231,8 @@ async function main() {
             }
             
             // Add a small delay between pages to be respectful to the server
-            console.log("Waiting 2 seconds before next page...");
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log(`Waiting ${CONFIG.SLEEP_BETWEEN_PAGES_MS / 1000} seconds before next page...`);
+            await new Promise(resolve => setTimeout(resolve, CONFIG.SLEEP_BETWEEN_PAGES_MS));
         }
         
         console.log("Script success.");
