@@ -1,4 +1,4 @@
-export default geoNames = [
+const geoNames = [
     // Anmore, BC: https://www.realtor.ca/map#ZoomLevel=12&Center=49.340702%2C-122.858050&LatitudeMax=49.40218&LongitudeMax=-122.64622&LatitudeMin=49.27915&LongitudeMin=-123.06988&view=list&Sort=6-D&PGeoIds=g30_c2b8srjt&GeoName=Anmore%2C%20BC&PropertyTypeGroupID=1&TransactionTypeId=2&PropertySearchTypeId=0&Currency=CAD
     {
         Center: '49.340702,-122.858050',
