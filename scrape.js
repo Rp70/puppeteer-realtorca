@@ -26,7 +26,7 @@ const CONFIG = {
             LatitudeMin: '49.00206',
             LongitudeMin: '-123.71483',
             view: 'list',
-            CurrentPage: currentPage.toString(), // Use the currentPage variable
+            ...( currentPage > 1 ? { CurrentPage: currentPage.toString()} : {} ), // Use the currentPage variable
             Sort: '6-D',
             PGeoIds: 'g40_c2b84pnz',
             GeoName: 'Metro Vancouver, BC',
@@ -91,7 +91,7 @@ async function runScraper(browser, mapUrl) {
 
        // Optional scroll trigger
       try {
-            await page.evaluate(() => window.scrollBy(0, 50));
+            await page.evaluate(() => window.scrollBy(0, 100));
         } catch (e) { /* ignore scroll errors */ }
 
        console.log("Awaiting API response...");
