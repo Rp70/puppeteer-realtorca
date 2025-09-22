@@ -69,7 +69,8 @@ const CONFIG = {
         return `${baseUrl}${queryString}`;
     },
     API_URL: 'https://api2.realtor.ca/Listing.svc/PropertySearch_Post',
-    OUTPUT_FILE: 'realtor_listings_perfect.json',
+    OUTPUT_FILE: './data/realtor_listings_perfect.json',
+    BACKUP_DIR: './data/backups',
     getBackupFileName: () => {
         const now = new Date();
         const yyyy = now.getFullYear();
@@ -171,22 +172,16 @@ async function saveData(data, filePath, isFirstPage = false) {
      
      let allData = {};
      
-     // Check if file exists and read existing data (unless it's the first page)
-     if (!isFirstPage) {
-         try {
-             const existingContent = await fs.readFile(filePath, 'utf8');
-             allData = JSON.parse(existingContent);
-         } catch (error) {
-             // File doesn't exist or invalid JSON, start with empty structure
-             console.log("Starting with new data file or file doesn't exist");
-             allData = { Results: [], ...data };
-             // Remove Results from data to avoid duplication
-             delete allData.Results;
-             allData.Results = [];
-         }
-     } else {
-         // First page, start fresh
-         allData = { ...data };
+     // Always try to read existing data (removed isFirstPage check)
+     try {
+         const existingContent = await fs.readFile(filePath, 'utf8');
+         allData = JSON.parse(existingContent);
+     } catch (error) {
+         // File doesn't exist or invalid JSON, start with empty structure
+         console.log("Starting with new data file or file doesn't exist");
+         allData = { Results: [], ...data };
+         // Remove Results from data to avoid duplication
+         delete allData.Results;
          allData.Results = [];
      }
      
@@ -232,11 +227,15 @@ async function saveData(data, filePath, isFirstPage = false) {
 }
 
 // 5. Backup Function
-async function createBackup(originalFile, backupFile) {
+async function createBackup(originalFile, backupFileName) {
     try {
+        // Ensure backup directory exists
+        await fs.mkdir(CONFIG.BACKUP_DIR, { recursive: true });
+        
+        const backupFilePath = `${CONFIG.BACKUP_DIR}/${backupFileName}`;
         const existingContent = await fs.readFile(originalFile, 'utf8');
-        await fs.writeFile(backupFile, existingContent, 'utf8');
-        console.log(`Backup created: ${backupFile}`);
+        await fs.writeFile(backupFilePath, existingContent, 'utf8');
+        console.log(`Backup created: ${backupFilePath}`);
         return true;
     } catch (error) {
         console.log(`No existing file to backup or backup failed: ${error.message}`);
@@ -292,12 +291,12 @@ async function main() {
                 if (data.Results && data.Results.length > 0) {
                     // Remove the shouldStop flag before saving
                     const { shouldStop, ...dataToSave } = data;
-                    await saveData(dataToSave, CONFIG.OUTPUT_FILE, isFirstPage);
+                    await saveData(dataToSave, CONFIG.OUTPUT_FILE);
                 }
                 break;
             }
             
-            await saveData(data, CONFIG.OUTPUT_FILE, isFirstPage);
+            await saveData(data, CONFIG.OUTPUT_FILE);
             
             isFirstPage = false;
             
