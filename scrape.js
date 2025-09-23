@@ -40,6 +40,9 @@ const CONFIG = {
                     return null; // Signal to stop further processing
                 }
             }
+            
+            // Signal that we need to delay before the next geo area
+            return { shouldDelayForGeo: true };
         }
         
         const currentTransactionId = transactionTypeIds[currentTransactionIndex];
@@ -86,6 +89,12 @@ const CONFIG = {
         // Randomize between 60-80 seconds (60000-80000 ms)
         const minMs = 60000;
         const maxMs = 80000;
+        return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    },
+    getSleepBetweenGeos: () => {
+        // Randomize between 1111-3333 seconds (1111000-3333000 ms)
+        const minMs = 1111000;
+        const maxMs = 3333000;
         return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
     },
     HEADLESS: false, // true = faster, no UI. false = slower, visual, better for debug/evasion.
@@ -317,13 +326,61 @@ async function main() {
         
         // Loop until CONFIG.MAP_URL returns null (when it's a function)
         while (true) {
-            const mapUrl = typeof CONFIG.MAP_URL === 'function' ? CONFIG.MAP_URL() : CONFIG.MAP_URL;
+            const mapUrlResult = typeof CONFIG.MAP_URL === 'function' ? CONFIG.MAP_URL() : CONFIG.MAP_URL;
             
             // If CONFIG.MAP_URL is a function and returns null, break the loop
-            if (mapUrl === null) {
+            if (mapUrlResult === null) {
                 console.log("CONFIG.MAP_URL returned null. Stopping pagination.");
                 break;
             }
+            
+            // Check if we need to delay for geo change
+            if (mapUrlResult && typeof mapUrlResult === 'object' && mapUrlResult.shouldDelayForGeo) {
+                const geoSleepMs = CONFIG.getSleepBetweenGeos();
+                const currentGeo = geoNames[currentGeoIndex];
+                const currentTransactionId = transactionTypeIds[currentTransactionIndex];
+                
+                console.log(`\n=== SWITCHING TO NEW GEO AREA ===`);
+                console.log(`Moving to Transaction: ${currentTransactionId}, Geo: ${currentGeo.GeoName}`);
+                console.log(`Waiting ${Math.round(geoSleepMs / 1000)} seconds before starting new geo area...`);
+                
+                await new Promise(resolve => setTimeout(resolve, geoSleepMs));
+                
+                console.log(`Delay completed. Starting geo area: ${currentGeo.GeoName}`);
+                
+                // Get the actual URL after the delay
+                const actualMapUrl = CONFIG.MAP_URL();
+                if (actualMapUrl === null || (actualMapUrl && typeof actualMapUrl === 'object')) {
+                    // Something went wrong, skip this iteration
+                    continue;
+                }
+                
+                const data = await runScraper(browser, actualMapUrl);
+                
+                // Check if we should stop based on API response conditions
+                if (data.shouldStop) {
+                    console.log("Stopping pagination due to API response conditions.");
+                    // Save data even if we're stopping (might have some results)
+                    if (data.Results && data.Results.length > 0) {
+                        // Remove the shouldStop flag before saving
+                        const { shouldStop, ...dataToSave } = data;
+                        await saveData(dataToSave, CONFIG.OUTPUT_FILE);
+                        // Save final state
+                        await saveScraperState();
+                    }
+                    break;
+                }
+                
+                await saveData(data, CONFIG.OUTPUT_FILE);
+                
+                // Save scraper state after successful scrape
+                await saveScraperState();
+                
+                isFirstPage = false;
+                continue;
+            }
+            
+            const mapUrl = mapUrlResult;
             
             // If CONFIG.MAP_URL is not a function, run once and break
             if (typeof CONFIG.MAP_URL !== 'function' && !isFirstPage) {
