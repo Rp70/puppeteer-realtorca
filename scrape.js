@@ -88,7 +88,46 @@ const CONFIG = {
     EXECUTABLE_PATH: '/usr/bin/google-chrome-stable', // Standard path if installed via apt in Docker
     BLOCKED_RESOURCE_TYPES: ['image', 'media', 'font', 'stylesheet', 'other'], // Efficiency: block non essential
     BLOCKED_URL_PATTERNS: ['.css', 'google-analytics', 'googletagmanager', 'doubleclick', 'scorecardresearch', 'youtube', 'intergient'], // Efficiency
+    RESUME: true, // Whether to resume from last state in data/scraper.json
+    STATE_FILE: './data/scraper.json', // File to store scraper state
 };
+
+// State Management Functions
+async function loadScraperState() {
+    if (!CONFIG.RESUME) {
+        console.log("Resume disabled. Starting from beginning.");
+        return { currentTransactionIndex: 0, currentGeoIndex: 0, currentPage: 0 };
+    }
+    
+    try {
+        const stateContent = await fs.readFile(CONFIG.STATE_FILE, 'utf8');
+        const state = JSON.parse(stateContent);
+        console.log(`Resuming from: Transaction ${state.currentTransactionIndex}, Geo ${state.currentGeoIndex}, Page ${state.currentPage}`);
+        return state;
+    } catch (error) {
+        console.log("No existing state file found. Starting from beginning.");
+        return { currentTransactionIndex: 0, currentGeoIndex: 0, currentPage: 0 };
+    }
+}
+
+async function saveScraperState() {
+    try {
+        // Ensure data directory exists
+        await fs.mkdir('./data', { recursive: true });
+        
+        const state = {
+            currentTransactionIndex,
+            currentGeoIndex,
+            currentPage,
+            lastUpdated: new Date().toISOString()
+        };
+        
+        await fs.writeFile(CONFIG.STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+        console.log(`State saved: Transaction ${currentTransactionIndex}, Geo ${currentGeoIndex}, Page ${currentPage}`);
+    } catch (error) {
+        console.warn(`Failed to save scraper state: ${error.message}`);
+    }
+}
 
 // 3. Core Logic Function
 async function runScraper(browser, mapUrl) {
@@ -248,6 +287,12 @@ async function main() {
      console.log("Script start.");
      let browser;
      
+     // Load scraper state if resuming
+     const savedState = await loadScraperState();
+     currentTransactionIndex = savedState.currentTransactionIndex;
+     currentGeoIndex = savedState.currentGeoIndex;
+     currentPage = savedState.currentPage;
+     
      // Create backup of existing file before starting
      const backupFileName = CONFIG.getBackupFileName();
      await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
@@ -292,11 +337,16 @@ async function main() {
                     // Remove the shouldStop flag before saving
                     const { shouldStop, ...dataToSave } = data;
                     await saveData(dataToSave, CONFIG.OUTPUT_FILE);
+                    // Save final state
+                    await saveScraperState();
                 }
                 break;
             }
             
             await saveData(data, CONFIG.OUTPUT_FILE);
+            
+            // Save scraper state after successful scrape
+            await saveScraperState();
             
             isFirstPage = false;
             
@@ -308,6 +358,16 @@ async function main() {
             // Add a small delay between pages to be respectful to the server
             console.log(`Waiting ${CONFIG.SLEEP_BETWEEN_PAGES_MS / 1000} seconds before next page...`);
             await new Promise(resolve => setTimeout(resolve, CONFIG.SLEEP_BETWEEN_PAGES_MS));
+        }
+        
+        // Clear state file on successful completion
+        if (CONFIG.RESUME) {
+            try {
+                await fs.unlink(CONFIG.STATE_FILE);
+                console.log("State file cleared on successful completion.");
+            } catch (error) {
+                // Ignore error if file doesn't exist
+            }
         }
         
         console.log("Script success.");
