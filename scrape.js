@@ -137,7 +137,8 @@ async function saveScraperState() {
         };
         
         await fs.writeFile(CONFIG.STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
-        console.log(`State saved: Transaction ${currentTransactionIndex}, Geo ${currentGeoIndex}, Page ${currentPage}`);
+        const currentGeoName = geoNames[currentGeoIndex] ? geoNames[currentGeoIndex].name : 'N/A';
+        console.log(`State saved: Transaction ${currentTransactionIndex}, Geo ${currentGeoIndex} (${currentGeoName}), Page ${currentPage}`);
     } catch (error) {
         console.warn(`Failed to save scraper state: ${error.message}`);
     }
