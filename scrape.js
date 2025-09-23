@@ -19,7 +19,7 @@ let currentPage = 0;
 const CONFIG = {
     MAP_URL: () => {
         const baseUrl = 'https://www.realtor.ca/map#';
-        const maxPages = 50;
+        const maxPages = 10;
 
         // Increment page
         currentPage += 1;
@@ -48,8 +48,8 @@ const CONFIG = {
         console.log(`Generating URL for Transaction: ${currentTransactionId}, Geo: ${currentGeo.GeoName}, Page: ${currentPage}`);
         
         const params = {
-            ZoomLevel: '11',
-            Center: currentGeo.Center,
+            // ZoomLevel: '11', // DO NOT enablle this until we understand its impact
+            // Center: currentGeo.Center, // DO NOT enablle this until we understand its impact
             LatitudeMax: currentGeo.LatitudeMax,
             LongitudeMax: currentGeo.LongitudeMax,
             LatitudeMin: currentGeo.LatitudeMin,
