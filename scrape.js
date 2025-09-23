@@ -82,7 +82,12 @@ const CONFIG = {
     },
     USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     TIMEOUT_MS: 60000, // For navigation and waiting for response
-    SLEEP_BETWEEN_PAGES_MS: 60000, // 60 seconds delay between pages to be respectful to the server
+    getSleepBetweenPages: () => {
+        // Randomize between 60-80 seconds (60000-80000 ms)
+        const minMs = 60000;
+        const maxMs = 80000;
+        return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    },
     HEADLESS: false, // true = faster, no UI. false = slower, visual, better for debug/evasion.
     // EXECUTABLE_PATH: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // <<-- THIS IS NOW UNCOMMENTED
     EXECUTABLE_PATH: '/usr/bin/google-chrome-stable', // Standard path if installed via apt in Docker
@@ -355,9 +360,10 @@ async function main() {
                 break;
             }
             
-            // Add a small delay between pages to be respectful to the server
-            console.log(`Waiting ${CONFIG.SLEEP_BETWEEN_PAGES_MS / 1000} seconds before next page...`);
-            await new Promise(resolve => setTimeout(resolve, CONFIG.SLEEP_BETWEEN_PAGES_MS));
+            // Add a randomized delay between pages to be respectful to the server
+            const sleepMs = CONFIG.getSleepBetweenPages();
+            console.log(`Waiting ${sleepMs / 1000} seconds before next page...`);
+            await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         
         // Clear state file on successful completion
