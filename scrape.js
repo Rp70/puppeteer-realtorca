@@ -144,6 +144,25 @@ async function saveScraperState() {
     }
 }
 
+async function resetScraperState() {
+    try {
+        // Ensure data directory exists
+        await fs.mkdir('./data', { recursive: true });
+        
+        const initialState = {
+            currentTransactionIndex: 0,
+            currentGeoIndex: 0,
+            currentPage: 0,
+            lastUpdated: new Date().toISOString()
+        };
+        
+        await fs.writeFile(CONFIG.STATE_FILE, JSON.stringify(initialState, null, 2), 'utf8');
+        console.log("State file reset to initial values for next cycle.");
+    } catch (error) {
+        console.warn(`Failed to reset scraper state: ${error.message}`);
+    }
+}
+
 // 3. Core Logic Function
 async function runScraper(browser, mapUrl) {
      console.log("Setting up page...");
@@ -424,14 +443,9 @@ async function main() {
             await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         
-        // Clear state file on successful completion
+        // Reset state file on successful completion for next cycle
         if (CONFIG.RESUME) {
-            try {
-                await fs.unlink(CONFIG.STATE_FILE);
-                console.log("State file cleared on successful completion.");
-            } catch (error) {
-                // Ignore error if file doesn't exist
-            }
+            await resetScraperState();
         }
         
         console.log("Script success.");
