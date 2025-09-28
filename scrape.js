@@ -15,15 +15,22 @@ const transactionTypeIds = [
 
 puppeteer.use(StealthPlugin());
 
-// Parse command line arguments
+// Parse command line arguments - now supports both modes in sequence
 const args = process.argv.slice(2);
-const mode = args[0] || 'list'; // Default to 'list' mode
+const skipListings = args.includes('--skip-listings'); // Optional flag to skip listings and only do details
 
-if (!['list', 'detail'].includes(mode)) {
-    console.error('Usage: node scrape.js [list|detail]');
-    console.error('  list   - Scrape listings from the map URL (default)');
-    console.error('  detail - Extract details from saved listings');
-    process.exit(1);
+if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: node scrape.js [--skip-listings]');
+    console.log('');
+    console.log('The script runs in integrated mode:');
+    console.log('  1. Scrapes each page of listings from realtor.ca API');
+    console.log('  2. Immediately scrapes detailed property information for that page');
+    console.log('  3. Merges and saves both listings and details together per page');
+    console.log('');
+    console.log('Options:');
+    console.log('  --skip-listings  Skip the listings phase and only process remaining details');
+    console.log('  --help, -h       Show this help message');
+    process.exit(0);
 }
 
 // State tracking for nested loops
@@ -94,7 +101,6 @@ const CONFIG = {
     API_URL: 'https://api2.realtor.ca/Listing.svc/PropertySearch_Post',
     OUTPUT_FILE: './data/realtor_listings_perfect.json',
     DETAIL_FILE: './tmp/detail.html',
-    DETAIL_OUTPUT_FILE: './data/property_details.json',
     BACKUP_DIR: './data/backups',
     getBackupFileName: () => {
         const now = new Date();
@@ -194,35 +200,7 @@ async function resetScraperState() {
     }
 }
 
-async function loadDetailProgress() {
-    try {
-        const stateContent = await fs.readFile(CONFIG.STATE_FILE, 'utf8');
-        const state = JSON.parse(stateContent);
-        
-        if (state.detailProgress && Array.isArray(state.detailProgress.processedPropertyIds)) {
-            console.log(`Resuming detail scraping from ${state.detailProgress.processedPropertyIds.length} processed properties`);
-            return state.detailProgress;
-        }
-    } catch (error) {
-        console.log("No existing detail progress found. Starting from beginning.");
-    }
-    
-    return {
-        processedPropertyIds: [],
-        lastProcessedIndex: -1,
-        lastUpdated: new Date().toISOString()
-    };
-}
 
-async function saveDetailProgress(processedPropertyIds, currentIndex) {
-    const detailProgress = {
-        processedPropertyIds: processedPropertyIds,
-        lastProcessedIndex: currentIndex,
-        lastUpdated: new Date().toISOString()
-    };
-    
-    await saveScraperState(detailProgress);
-}
 
 // Error Handling Functions
 async function handleServerError(errorType, details = '') {
@@ -468,13 +446,120 @@ async function downloadImage(url, filePath, userAgent) {
     });
 }
 
-async function savePropertyImages(propertyId, images, userAgent) {
+// Helper function to check if images need to be updated based on PhotoChangeDateUTC
+async function shouldUpdateImages(propertyId, newPhotoChangeDateUTC) {
+    if (!newPhotoChangeDateUTC) {
+        console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, skipping image download`);
+        return false;
+    }
+    
+    try {
+        // Read existing listings to find current PhotoChangeDateUTC
+        const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
+        const listingsData = JSON.parse(existingContent);
+        
+        if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+            console.log(`No existing listings found, will download images for property ${propertyId}`);
+            return true;
+        }
+        
+        // Find the existing listing for this property
+        const existingListing = listingsData.Results.find(item => item.Id === propertyId);
+        
+        if (!existingListing) {
+            console.log(`Property ${propertyId} not found in existing listings, will download images`);
+            return true;
+        }
+        
+        const existingPhotoChangeDateUTC = existingListing.PhotoChangeDateUTC;
+        
+        if (!existingPhotoChangeDateUTC) {
+            console.log(`No existing PhotoChangeDateUTC for property ${propertyId}, will download images`);
+            return true;
+        }
+        
+        // Parse dates and compare
+        const existingDate = new Date(existingPhotoChangeDateUTC);
+        const newDate = new Date(newPhotoChangeDateUTC);
+        
+        if (newDate > existingDate) {
+            console.log(`PhotoChangeDateUTC is newer for property ${propertyId} (${newPhotoChangeDateUTC} > ${existingPhotoChangeDateUTC}), will update images`);
+            return true;
+        } else {
+            console.log(`PhotoChangeDateUTC is same or older for property ${propertyId} (${newPhotoChangeDateUTC} <= ${existingPhotoChangeDateUTC}), skipping image download`);
+            return false;
+        }
+        
+    } catch (error) {
+        console.warn(`Error checking PhotoChangeDateUTC for property ${propertyId}: ${error.message}, will download images`);
+        return true;
+    }
+}
+
+// Helper function to delete existing images for a property
+async function deleteExistingImages(propertyId) {
+    const imagesDir = `./data/properties/${propertyId}/images`;
+    
+    try {
+        // Check if images directory exists
+        await fs.access(imagesDir);
+        
+        // Read all files in the images directory
+        const files = await fs.readdir(imagesDir);
+        
+        // Delete all image files
+        for (const file of files) {
+            const filePath = path.join(imagesDir, file);
+            await fs.unlink(filePath);
+            console.log(`Deleted old image: ${file}`);
+        }
+        
+        console.log(`Deleted ${files.length} old images for property ${propertyId}`);
+        
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.log(`No existing images directory for property ${propertyId}`);
+        } else {
+            console.warn(`Error deleting existing images for property ${propertyId}: ${error.message}`);
+        }
+    }
+}
+
+async function savePropertyImages(propertyId, images, userAgent, photoChangeDateUTC = null) {
     if (!propertyId || !images || images.length === 0) {
         return [];
     }
     
+    // Check if we need to update images based on PhotoChangeDateUTC
+    const needsUpdate = await shouldUpdateImages(propertyId, photoChangeDateUTC);
+    
+    if (!needsUpdate) {
+        // Return existing images info if they exist
+        const imagesDir = `./data/properties/${propertyId}/images`;
+        try {
+            const files = await fs.readdir(imagesDir);
+            const existingImages = files.map((filename, index) => ({
+                url: `local://${path.join(imagesDir, filename)}`,
+                type: filename.startsWith('hero') ? 'hero' : filename.startsWith('grid') ? 'grid' : 'gallery',
+                index: index,
+                localPath: path.join(imagesDir, filename),
+                filename: filename
+            }));
+            console.log(`Using existing ${existingImages.length} images for property ${propertyId}`);
+            return existingImages;
+        } catch (error) {
+            // If we can't read existing images, continue with download
+            console.log(`Could not read existing images for property ${propertyId}, will download new ones`);
+        }
+    }
+    
     const propertyDir = `./data/properties/${propertyId}`;
     const imagesDir = `${propertyDir}/images`;
+    
+    // Delete existing images if we're updating
+    if (needsUpdate) {
+        await deleteExistingImages(propertyId);
+    }
     
     // Create directories
     await fs.mkdir(imagesDir, { recursive: true });
@@ -801,9 +886,6 @@ async function scrapePropertyDetail(browser, relativeUrl) {
 async function runDetailScraper() {
     console.log("Starting detail scraper...");
     
-    // Load detail progress
-    const detailProgress = await loadDetailProgress();
-    
     // Read the listings file
     let listingsData;
     try {
@@ -811,12 +893,12 @@ async function runDetailScraper() {
         listingsData = JSON.parse(content);
     } catch (error) {
         console.error(`Error reading listings file: ${error.message}`);
-        return;
+        return [];
     }
     
     if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
         console.error("No results found in listings file");
-        return;
+        return [];
     }
     
     // Filter items with RelativeDetailsURL
@@ -825,21 +907,13 @@ async function runDetailScraper() {
     
     if (itemsWithDetails.length === 0) {
         console.log("No listings with detail URLs found");
-        return;
+        return [];
     }
     
-    // Filter out already processed items based on property ID
-    const itemsToProcess = itemsWithDetails.filter(item => {
-        const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
-        return propertyId && !detailProgress.processedPropertyIds.includes(propertyId);
-    });
+    // Process all items (no filtering based on previous progress)
+    const itemsToProcess = itemsWithDetails;
     
-    console.log(`Found ${itemsToProcess.length} new items to process (${detailProgress.processedPropertyIds.length} already processed)`);
-    
-    if (itemsToProcess.length === 0) {
-        console.log("All items have already been processed");
-        return;
-    }
+    console.log(`Found ${itemsToProcess.length} items to process for details`);
     
     // Launch browser
     console.log(`Launching browser for detail scraping (Headless: ${CONFIG.HEADLESS})...`);
@@ -850,17 +924,8 @@ async function runDetailScraper() {
         ignoreHTTPSErrors: true,
     });
     
-    // Load existing processed properties
+    // Track detailed properties for batch merging
     let detailedProperties = [];
-    try {
-        const existingContent = await fs.readFile(CONFIG.DETAIL_OUTPUT_FILE, 'utf8');
-        const existingData = JSON.parse(existingContent);
-        if (existingData.properties && Array.isArray(existingData.properties)) {
-            detailedProperties = existingData.properties;
-        }
-    } catch (error) {
-        console.log("No existing detail output file found, starting fresh");
-    }
     
     let processed = detailProgress.processedPropertyIds.length;
     
@@ -904,7 +969,7 @@ async function runDetailScraper() {
                     continue;
                 }
                 
-                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT);
+                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT, item.PhotoChangeDateUTC);
                 
                 // Check if image downloading failed (no images saved despite having image URLs)
                 if (savedImages.length === 0 && details.extractedDetails.images.length > 0) {
@@ -913,6 +978,123 @@ async function runDetailScraper() {
                     await handleServerError('Image download failed', `Property ${details.Id} image downloads failed`);
                     i--; // Retry the same property
                     processed--; // Don't increment processed count
+                    continue;
+                }
+                         // Reset error count on successful processing
+                resetErrorCount();
+                
+                // Update the details with saved image information
+                details.extractedDetails.images = savedImages;
+                details.extractedDetails.imagesSaved = savedImages.length;
+                details.extractedDetails.imagesDirectory = `./data/properties/${details.Id}/images/`;
+                
+                // Close the page after processing
+                await page.close();
+                
+                // Save the extracted real estate information
+                detailedProperties.push(details);
+                
+                console.log(`Property processed: ${i + 1}/${itemsToProcess.length} (${details.extractedDetails.imagesSaved} images saved)`);
+            }
+            
+            // Add delay between requests
+            const sleepMs = CONFIG.getSleepBetweenPages();
+            console.log(`Waiting ${sleepMs / 1000} seconds before next detail page...`);
+            await new Promise(resolve => setTimeout(resolve, sleepMs));
+        }
+        
+        console.log(`Detail scraping completed. Processed ${itemsToProcess.length} properties.`);
+        
+        // Return detailed properties for merging
+        return detailedProperties;
+        
+    } catch (error) {
+        console.error(`Detail scraping error: ${error.message}`);
+        return detailedProperties; // Return what we have so far
+    } finally {
+        await browser.close();
+    }
+    
+    return detailedProperties;
+}
+
+// Helper function to run detail scraping for a single page of listings
+async function runDetailScrapingForPage(pageResults) {
+    if (!pageResults || !Array.isArray(pageResults) || pageResults.length === 0) {
+        console.log("No listings to process for detail scraping");
+        return;
+    }
+    
+    // Filter items with RelativeDetailsURL
+    const itemsWithDetails = pageResults.filter(item => item.RelativeDetailsURL);
+    console.log(`Found ${itemsWithDetails.length} listings with detail URLs in current page`);
+    
+    if (itemsWithDetails.length === 0) {
+        console.log("No listings with detail URLs found in current page");
+        return;
+    }
+    
+    // Process all items with detail URLs (no filtering based on previous progress)
+    const itemsToProcess = itemsWithDetails;
+    
+    console.log(`Found ${itemsToProcess.length} items to process for details in current page`);
+    
+    // Launch browser for detail scraping
+    console.log(`Launching browser for detail scraping (Headless: ${CONFIG.HEADLESS})...`);
+    const detailBrowser = await puppeteer.launch({
+        headless: CONFIG.HEADLESS,
+        executablePath: CONFIG.EXECUTABLE_PATH,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        ignoreHTTPSErrors: true,
+    });
+    
+    let detailedProperties = [];
+    
+    try {
+        for (let i = 0; i < itemsToProcess.length; i++) {
+            const item = itemsToProcess[i];
+            const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
+            
+            console.log(`Processing detail ${i + 1}/${itemsToProcess.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
+            
+            let result;
+            try {
+                result = await scrapePropertyDetail(detailBrowser, item.RelativeDetailsURL);
+            } catch (error) {
+                // Check if it's an HTTP error
+                if (error.message.includes('HTTP 4') || error.message.includes('HTTP 5')) {
+                    console.warn(`HTTP error for property ${propertyId}: ${error.message}`);
+                    await handleServerError('Detail page HTTP error', error.message);
+                    i--; // Retry the same property
+                    continue;
+                }
+                // Re-throw non-HTTP errors
+                throw error;
+            }
+            
+            if (result && result.details) {
+                const { page, details } = result;
+                
+                // Download and save images with proper headers to avoid detection
+                console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
+                
+                // Check for no images condition
+                if (details.extractedDetails.images.length === 0) {
+                    console.warn(`No images found for property ${details.Id}`);
+                    await page.close();
+                    await handleServerError('No images', `Property ${details.Id} has no images`);
+                    i--; // Retry the same property
+                    continue;
+                }
+                
+                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT, item.PhotoChangeDateUTC);
+                
+                // Check if image downloading failed (no images saved despite having image URLs)
+                if (savedImages.length === 0 && details.extractedDetails.images.length > 0) {
+                    console.warn(`Failed to download any images for property ${details.Id}`);
+                    await page.close();
+                    await handleServerError('Image download failed', `Property ${details.Id} image downloads failed`);
+                    i--; // Retry the same property
                     continue;
                 }
                 
@@ -927,30 +1109,10 @@ async function runDetailScraper() {
                 // Close the page after processing
                 await page.close();
                 
-                // Save only the extracted real estate information
+                // Save the extracted real estate information
                 detailedProperties.push(details);
                 
-                // Add to processed property IDs
-                if (propertyId) {
-                    detailProgress.processedPropertyIds.push(propertyId);
-                }
-                
-                // Save progress after every scrape (both detail output and state)
-                await fs.writeFile(
-                    CONFIG.DETAIL_OUTPUT_FILE, 
-                    JSON.stringify({
-                        totalProcessed: processed,
-                        totalItems: itemsWithDetails.length,
-                        scrapedAt: new Date().toISOString(),
-                        properties: detailedProperties
-                    }, null, 2), 
-                    'utf8'
-                );
-                
-                // Save detail progress to state file
-                await saveDetailProgress(detailProgress.processedPropertyIds, i);
-                
-                console.log(`Progress saved: ${processed}/${itemsWithDetails.length} processed (${savedImages.length} images saved)`);
+                console.log(`Detail processed: ${detailedProperties.length}/${itemsToProcess.length} (${details.extractedDetails.imagesSaved} images saved)`);
             }
             
             // Add delay between requests
@@ -959,56 +1121,95 @@ async function runDetailScraper() {
             await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         
-        // Save final results
-        await fs.writeFile(
-            CONFIG.DETAIL_OUTPUT_FILE, 
-            JSON.stringify({
-                totalProcessed: processed,
-                totalItems: itemsWithDetails.length,
-                scrapedAt: new Date().toISOString(),
-                properties: detailedProperties
-            }, null, 2), 
-            'utf8'
-        );
-        
-        // Clear detail progress from state since we're done
-        if (itemsToProcess.length > 0) {
-            await saveDetailProgress([], -1);
+        // Merge detail data into listings immediately
+        if (detailedProperties.length > 0) {
+            await mergeDetailIntoListings(detailedProperties, CONFIG.OUTPUT_FILE);
+            console.log(`Merged ${detailedProperties.length} detailed properties into listings file`);
         }
         
-        console.log(`Detail scraping completed. Processed ${processed} total properties (${itemsToProcess.length} new).`);
-        console.log(`Results saved to: ${CONFIG.DETAIL_OUTPUT_FILE}`);
+    } catch (error) {
+        console.error(`Detail scraping error for page: ${error.message}`);
+    } finally {
+        await detailBrowser.close();
+    }
+}
+
+// Helper function to merge detail data into listings
+async function mergeDetailIntoListings(detailData, outputFile) {
+    try {
+        // Read existing listings
+        const existingContent = await fs.readFile(outputFile, 'utf8');
+        const listingsData = JSON.parse(existingContent);
+        
+        if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+            console.warn('No existing listings found to merge details into');
+            return;
+        }
+        
+        // Create a map of listings by ID for efficient lookup
+        const listingsMap = new Map();
+        listingsData.Results.forEach(listing => {
+            if (listing.Id) {
+                listingsMap.set(listing.Id, listing);
+            }
+        });
+        
+        // Merge detail data into listings
+        detailData.forEach(detail => {
+            if (detail.Id && listingsMap.has(detail.Id)) {
+                const listing = listingsMap.get(detail.Id);
+                
+                // Add extractedDetails directly
+                if (detail.extractedDetails) {
+                    listing.extractedDetails = detail.extractedDetails;
+                }
+                
+                // Add other detail properties with X_ prefix if they don't exist in listing
+                Object.keys(detail).forEach(key => {
+                    if (key !== 'Id' && key !== 'extractedDetails') {
+                        const prefixedKey = `X_${key}`;
+                        if (!listing.hasOwnProperty(key)) {
+                            listing[prefixedKey] = detail[key];
+                        }
+                        // If key exists, we ignore it to avoid overwriting original listing data
+                    }
+                });
+                
+                console.log(`Detail data merged for property ${detail.Id}`);
+            } else {
+                console.warn(`Property ${detail.Id} not found in listings, skipping detail merge`);
+            }
+        });
+        
+        // Save updated listings
+        await fs.writeFile(outputFile, JSON.stringify(listingsData, null, 2), 'utf8');
+        console.log(`Detail data merged into ${detailData.length} listings and saved to ${outputFile}`);
         
     } catch (error) {
-        console.error(`Detail scraping error: ${error.message}`);
-    } finally {
-        await browser.close();
+        console.error(`Failed to merge detail data: ${error.message}`);
     }
 }
 
 // 7. Main Orchestration Function
 async function main() {
-     console.log(`Script start in ${mode} mode.`);
+     console.log("Script start - Integrated listings and details scraping (per-page detail processing).");
      
-     // Handle detail mode
-     if (mode === 'detail') {
-         await runDetailScraper();
-         console.log("Detail scraping completed.");
-         return;
-     }
-     
-     // List mode (original functionality)
      let browser;
+     let detailedProperties = [];
      
-     // Load scraper state if resuming
-     const savedState = await loadScraperState();
-     currentTransactionIndex = savedState.currentTransactionIndex;
-     currentGeoIndex = savedState.currentGeoIndex;
-     currentPage = savedState.currentPage;
-     
-     // Create backup of existing file before starting
-     const backupFileName = CONFIG.getBackupFileName();
-     await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
+     // PHASE 1: Listings scraping (unless skipped)
+     if (!skipListings) {
+         console.log("\n=== PHASE 1: LISTINGS SCRAPING ===");
+         
+         // Load scraper state if resuming
+         const savedState = await loadScraperState();
+         currentTransactionIndex = savedState.currentTransactionIndex;
+         currentGeoIndex = savedState.currentGeoIndex;
+         currentPage = savedState.currentPage;
+         
+         // Create backup of existing file before starting
+         const backupFileName = CONFIG.getBackupFileName();
+         await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
      
      try {
         console.log(`Launching browser (Headless: ${CONFIG.HEADLESS})...`);
@@ -1053,33 +1254,37 @@ async function main() {
                     // Something went wrong, skip this iteration
                     continue;
                 }
-                
-                const data = await runScraper(browser, actualMapUrl);
-                
-                // Check if we should retry due to server error
-                if (data.shouldRetry) {
-                    console.log("Retrying current geo area due to server error...");
-                    continue; // Retry the same geo area without advancing
+                     const data = await runScraper(browser, actualMapUrl);
+            
+            // Check if we should retry due to server error
+            if (data.shouldRetry) {
+                console.log("Retrying current geo area due to server error...");
+                continue; // Retry the same geo area without advancing
+            }
+            
+            // Check if we should stop based on API response conditions
+            if (data.shouldStop) {
+                console.log("Stopping pagination due to API response conditions.");
+                // Save data even if we're stopping (might have some results)
+                if (data.Results && data.Results.length > 0) {
+                    // Run detail scraping for this page's listings before saving data
+                    await runDetailScrapingForPage(data.Results);
+                    // Remove the shouldStop flag before saving
+                    const { shouldStop, ...dataToSave } = data;
+                    await saveData(dataToSave, CONFIG.OUTPUT_FILE);
+                    // Save final state
+                    await saveScraperState();
                 }
-                
-                // Check if we should stop based on API response conditions
-                if (data.shouldStop) {
-                    console.log("Stopping pagination due to API response conditions.");
-                    // Save data even if we're stopping (might have some results)
-                    if (data.Results && data.Results.length > 0) {
-                        // Remove the shouldStop flag before saving
-                        const { shouldStop, ...dataToSave } = data;
-                        await saveData(dataToSave, CONFIG.OUTPUT_FILE);
-                        // Save final state
-                        await saveScraperState();
-                    }
-                    break;
-                }
-                
-                await saveData(data, CONFIG.OUTPUT_FILE);
-                
-                // Save scraper state after successful scrape
-                await saveScraperState();
+                break;
+            }
+            
+            // Run detail scraping for the current page's listings before saving data
+            await runDetailScrapingForPage(data.Results);
+            
+            await saveData(data, CONFIG.OUTPUT_FILE);
+            
+            // Save scraper state after successful scrape
+            await saveScraperState();
                 
                 isFirstPage = false;
                 continue;
@@ -1107,6 +1312,8 @@ async function main() {
                 console.log("Stopping pagination due to API response conditions.");
                 // Save data even if we're stopping (might have some results)
                 if (data.Results && data.Results.length > 0) {
+                    // Run detail scraping for this page's listings before saving data
+                    await runDetailScrapingForPage(data.Results);
                     // Remove the shouldStop flag before saving
                     const { shouldStop, ...dataToSave } = data;
                     await saveData(dataToSave, CONFIG.OUTPUT_FILE);
@@ -1115,6 +1322,9 @@ async function main() {
                 }
                 break;
             }
+            
+            // Run detail scraping for the current page's listings before saving data
+            await runDetailScrapingForPage(data.Results);
             
             await saveData(data, CONFIG.OUTPUT_FILE);
             
@@ -1134,22 +1344,47 @@ async function main() {
             await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         
-        // Reset state file on successful completion for next cycle
-        if (CONFIG.RESUME) {
-            await resetScraperState();
-        }
-        
-        console.log("Script success.");
+         // Reset state file on successful completion for next cycle
+         if (CONFIG.RESUME) {
+             await resetScraperState();
+         }
+         
+         console.log("Listings scraping completed successfully.");
 
-    } catch (error) {
-        console.error("Script Error:", error.message || error);
-    } finally {
-        if (browser) {
-            console.log("Closing browser.");
-            await browser.close();
-        }
-         console.log("Script end.");
-    }
+     } catch (error) {
+         console.error("Listings scraping error:", error.message || error);
+     } finally {
+         if (browser) {
+             console.log("Closing listings browser.");
+             await browser.close();
+         }
+     }
+     } else {
+         console.log("Skipping listings scraping (--skip-listings flag provided)");
+     }
+     
+     // If --skip-listings was used, run detail scraping for any remaining unprocessed listings
+     if (skipListings) {
+         console.log("\n=== PROCESSING REMAINING DETAILS (--skip-listings mode) ===");
+         try {
+             detailedProperties = await runDetailScraper();
+             console.log(`Detail scraping completed. Extracted details for ${detailedProperties.length} properties.`);
+             
+             // Merge detail data into listings
+             if (detailedProperties.length > 0) {
+                 await mergeDetailIntoListings(detailedProperties, CONFIG.OUTPUT_FILE);
+             }
+             
+         } catch (error) {
+             console.error("Detail scraping error:", error.message || error);
+         }
+     } else {
+         console.log("\n=== DETAIL SCRAPING COMPLETED PER PAGE ===");
+         console.log("Details were scraped and merged immediately after each page of listings.");
+     }
+     
+     console.log("\n=== SCRIPT COMPLETED ===");
+     console.log("Listings and details have been processed and saved together per page.");
 }
 
 // Execute
