@@ -31,6 +31,10 @@ let currentTransactionIndex = 0;
 let currentGeoIndex = 0;
 let currentPage = 0;
 
+// Error retry tracking
+let consecutiveErrorCount = 0;
+const MAX_CONSECUTIVE_ERRORS = 3;
+
 // 2. Central Configuration
 const CONFIG = {
     MAP_URL: () => {
@@ -220,6 +224,34 @@ async function saveDetailProgress(processedPropertyIds, currentIndex) {
     await saveScraperState(detailProgress);
 }
 
+// Error Handling Functions
+async function handleServerError(errorType, details = '') {
+    consecutiveErrorCount++;
+    console.warn(`Server error detected (${errorType}): ${details}`);
+    console.warn(`Consecutive error count: ${consecutiveErrorCount}/${MAX_CONSECUTIVE_ERRORS}`);
+    
+    if (consecutiveErrorCount >= MAX_CONSECUTIVE_ERRORS) {
+        console.error(`Maximum consecutive errors (${MAX_CONSECUTIVE_ERRORS}) reached. Exiting script.`);
+        process.exit(1);
+    }
+    
+    const sleepMs = CONFIG.getSleepBetweenGeos();
+    console.log(`Sleeping for ${Math.round(sleepMs / 1000)} seconds due to server error...`);
+    await new Promise(resolve => setTimeout(resolve, sleepMs));
+    console.log('Waking up from error sleep, retrying...');
+}
+
+function resetErrorCount() {
+    if (consecutiveErrorCount > 0) {
+        console.log('Server response successful, resetting error count.');
+        consecutiveErrorCount = 0;
+    }
+}
+
+function isServerError(statusCode) {
+    return statusCode >= 400 && statusCode <= 599;
+}
+
 // 3. Core Logic Function
 async function runScraper(browser, mapUrl) {
      console.log("Setting up page...");
@@ -268,11 +300,22 @@ async function runScraper(browser, mapUrl) {
        console.log(`API Response Status: ${response.status()}`);
        if (!response.ok()) {
            const text = await response.text();
+           
+           // Check if it's a server error (4xx or 5xx)
+           if (isServerError(response.status())) {
+               await page.close();
+               await handleServerError(`API ${response.status()}`, `${response.statusText()}. Body: ${text.substring(0, 200)}`);
+               return { shouldRetry: true };
+           }
+           
            throw new Error(`API HTTP Error ${response.status()} ${response.statusText()}. Body: ${text.substring(0, 200)}`);
         }
 
        const data = await response.json(); // Throws if JSON is invalid
        console.log("API response JSON parsed.");
+       
+       // Reset error count on successful API response
+       resetErrorCount();
        
        // Check for stopping conditions
        if (data.Paging && data.Paging.RecordsPerPage === 0) {
@@ -472,6 +515,12 @@ async function savePropertyImages(propertyId, images, userAgent) {
             
         } catch (error) {
             console.warn(`Failed to download image ${image.url}: ${error.message}`);
+            
+            // Check if it's an HTTP error (4xx or 5xx)
+            if (error.message.includes('HTTP 4') || error.message.includes('HTTP 5')) {
+                console.warn(`HTTP error downloading image: ${error.message}`);
+                // Don't throw here, but the caller will check if no images were saved
+            }
             // Continue with other images even if one fails
         }
     }
@@ -515,10 +564,16 @@ async function scrapePropertyDetail(browser, relativeUrl) {
     });
     
     try {
-        await page.goto(fullUrl, {
+        const response = await page.goto(fullUrl, {
             waitUntil: 'networkidle0',
             timeout: CONFIG.TIMEOUT_MS
         });
+        
+        // Check for HTTP errors
+        if (response && isServerError(response.status())) {
+            await page.close();
+            throw new Error(`HTTP ${response.status()}: ${response.statusText()}`);
+        }
         
         // Get the full HTML content
         const htmlContent = await page.content();
@@ -817,13 +872,52 @@ async function runDetailScraper() {
             processed++;
             console.log(`Processing ${processed}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
             
-            const result = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
+            let result;
+            try {
+                result = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
+            } catch (error) {
+                // Check if it's an HTTP error
+                if (error.message.includes('HTTP 4') || error.message.includes('HTTP 5')) {
+                    console.warn(`HTTP error for property ${propertyId}: ${error.message}`);
+                    await handleServerError('Detail page HTTP error', error.message);
+                    i--; // Retry the same property
+                    processed--; // Don't increment processed count
+                    continue;
+                }
+                // Re-throw non-HTTP errors
+                throw error;
+            }
+            
             if (result && result.details) {
                 const { page, details } = result;
                 
                 // Download and save images with proper headers to avoid detection
                 console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
+                
+                // Check for no images condition
+                if (details.extractedDetails.images.length === 0) {
+                    console.warn(`No images found for property ${details.Id}`);
+                    await page.close();
+                    await handleServerError('No images', `Property ${details.Id} has no images`);
+                    i--; // Retry the same property
+                    processed--; // Don't increment processed count
+                    continue;
+                }
+                
                 const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT);
+                
+                // Check if image downloading failed (no images saved despite having image URLs)
+                if (savedImages.length === 0 && details.extractedDetails.images.length > 0) {
+                    console.warn(`Failed to download any images for property ${details.Id}`);
+                    await page.close();
+                    await handleServerError('Image download failed', `Property ${details.Id} image downloads failed`);
+                    i--; // Retry the same property
+                    processed--; // Don't increment processed count
+                    continue;
+                }
+                
+                // Reset error count on successful processing
+                resetErrorCount();
                 
                 // Update the details with saved image information
                 details.extractedDetails.images = savedImages;
@@ -962,6 +1056,12 @@ async function main() {
                 
                 const data = await runScraper(browser, actualMapUrl);
                 
+                // Check if we should retry due to server error
+                if (data.shouldRetry) {
+                    console.log("Retrying current geo area due to server error...");
+                    continue; // Retry the same geo area without advancing
+                }
+                
                 // Check if we should stop based on API response conditions
                 if (data.shouldStop) {
                     console.log("Stopping pagination due to API response conditions.");
@@ -995,6 +1095,12 @@ async function main() {
             
             console.log(`\n--- Processing ${isFirstPage ? 'first' : 'next'} page ---`);
             const data = await runScraper(browser, mapUrl);
+            
+            // Check if we should retry due to server error
+            if (data.shouldRetry) {
+                console.log("Retrying current page due to server error...");
+                continue; // Retry the same page without advancing
+            }
             
             // Check if we should stop based on API response conditions
             if (data.shouldStop) {
