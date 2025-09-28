@@ -542,50 +542,65 @@ async function scrapePropertyDetail(browser, relativeUrl) {
                 }
             }
             
-            // Extract basic property information with better selectors
+            // Extract basic property information matching realtor_listings_perfect.json structure
             const details = {
-                propertyId: propertyId,
-                mlsNumber: mlsNumber,
-                price: price,
-                address: address,
-                city: dataLayerInfo.city || extractText('.city'),
-                province: dataLayerInfo.province || extractText('.province'),
-                postalCode: extractText('.postalCode'),
-                propertyType: dataLayerInfo.propertyType || extractText('.propertyType'),
-                buildingType: dataLayerInfo.buildingType || extractText('.buildingType'),
-                bedrooms: dataLayerInfo.bedrooms || extractText('.bedroomsValue') || extractText('[data-bedrooms]'),
-                bathrooms: dataLayerInfo.bathrooms || extractText('.bathroomsValue') || extractText('[data-bathrooms]'),
-                sqft: dataLayerInfo.interiorFloorSpace || extractText('.sqftValue'),
-                lotSize: dataLayerInfo.landSize || extractText('.lotSizeValue'),
-                yearBuilt: extractText('.yearBuiltValue') || extractText('[data-year-built]'),
-                neighbourhood: dataLayerInfo.neighbourhood,
-                parkingType: dataLayerInfo.parkingType,
-                buildingAmenities: dataLayerInfo.buildingAmenities,
-                buildingStyle: dataLayerInfo.buildingStyle,
+                // Top-level fields matching the realtor API structure
+                Id: propertyId,
+                MlsNumber: mlsNumber,
+                PublicRemarks: extractText('#propertyDescriptionCon') || extractText('.propertyDescription') || extractText('.listingDescription'),
                 
-                // Description
-                description: extractText('#propertyDescriptionCon') || extractText('.propertyDescription') || extractText('.listingDescription'),
-                
-                // Property details from various sections
-                propertyDetails: {},
-                
-                // Features and amenities
-                features: [],
-                
-                // Images
-                images: [],
-                
-                // Agent information
-                agent: {
-                    name: extractText('.realtorCardName') || extractText('.agentName'),
-                    phone: extractText('.realtorCardPhone') || extractText('.agentPhone'),
-                    email: extractText('.realtorCardEmail') || extractText('.agentEmail'),
-                    company: extractText('.realtorCardOfficeName') || extractText('.agentCompany')
+                // Building information
+                Building: {
+                    BathroomTotal: dataLayerInfo.bathrooms || extractText('.bathroomsValue') || extractText('[data-bathrooms]'),
+                    Bedrooms: dataLayerInfo.bedrooms || extractText('.bedroomsValue') || extractText('[data-bedrooms]'),
+                    SizeInterior: dataLayerInfo.interiorFloorSpace || extractText('.sqftValue'),
+                    Type: dataLayerInfo.buildingType || extractText('.buildingType'),
+                    Ammenities: dataLayerInfo.buildingAmenities || extractText('.buildingAmenities'),
+                    HalfBathTotal: extractText('.halfBathValue') || "0"
                 },
                 
-                // Scraped timestamp and URL
-                scrapedAt: new Date().toISOString(),
-                sourceUrl: window.location.href
+                // Property information  
+                Property: {
+                    Price: price,
+                    Type: dataLayerInfo.propertyType || extractText('.propertyType'),
+                    Address: {
+                        AddressText: address,
+                        // Note: Longitude and Latitude would need to be extracted separately if available
+                        PermitShowAddress: true
+                    },
+                    // Parking information
+                    ParkingType: dataLayerInfo.parkingType,
+                    ParkingSpaceTotal: extractText('.parkingSpacesValue'),
+                    OwnershipType: extractText('.ownershipType'),
+                    AmmenitiesNearBy: extractText('.amenitiesNearBy')
+                },
+                
+                // Land information
+                Land: {
+                    SizeTotal: dataLayerInfo.landSize || extractText('.lotSizeValue') || "Unknown"
+                },
+                
+                // Additional extracted fields
+                PostalCode: extractText('.postalCode'),
+                ProvinceName: dataLayerInfo.province || extractText('.province'),
+                
+                // Custom extracted data for our use
+                extractedDetails: {
+                    yearBuilt: extractText('.yearBuiltValue') || extractText('[data-year-built]'),
+                    neighbourhood: dataLayerInfo.neighbourhood,
+                    buildingStyle: dataLayerInfo.buildingStyle,
+                    propertyDetails: {},
+                    features: [],
+                    images: [],
+                    agent: {
+                        name: extractText('.realtorCardName') || extractText('.agentName'),
+                        phone: extractText('.realtorCardPhone') || extractText('.agentPhone'),
+                        email: extractText('.realtorCardEmail') || extractText('.agentEmail'),
+                        company: extractText('.realtorCardOfficeName') || extractText('.agentCompany')
+                    },
+                    scrapedAt: new Date().toISOString(),
+                    sourceUrl: window.location.href
+                }
             };
             
             // Extract property details from multiple possible table structures
@@ -616,7 +631,7 @@ async function scrapePropertyDetail(browser, relativeUrl) {
                         const key = label.textContent.trim().replace(':', '').replace(/\s+/g, '_');
                         const val = value.textContent.trim();
                         if (key && val && key !== val) {
-                            details.propertyDetails[key] = val;
+                            details.extractedDetails.propertyDetails[key] = val;
                         }
                     }
                 });
@@ -633,11 +648,11 @@ async function scrapePropertyDetail(browser, relativeUrl) {
             
             featureSelectors.forEach(selector => {
                 const features = extractMultiple(selector);
-                details.features = details.features.concat(features);
+                details.extractedDetails.features = details.extractedDetails.features.concat(features);
             });
             
             // Remove duplicates from features
-            details.features = [...new Set(details.features)];
+            details.extractedDetails.features = [...new Set(details.extractedDetails.features)];
             
             // Extract images with specific types and roles
             const imageTypes = {
@@ -692,7 +707,7 @@ async function scrapePropertyDetail(browser, relativeUrl) {
             });
             
             // Combine all images into a single array with metadata
-            details.images = [
+            details.extractedDetails.images = [
                 ...imageTypes.hero,
                 ...imageTypes.grid,
                 ...imageTypes.gallery
@@ -713,9 +728,9 @@ async function scrapePropertyDetail(browser, relativeUrl) {
                     const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-original');
                     if (src && !src.includes('placeholder') && !src.includes('icon') && src.includes('realtor.ca')) {
                         // Check if this image is already in our typed images
-                        const alreadyExists = details.images.some(existingImg => existingImg.url === src);
+                        const alreadyExists = details.extractedDetails.images.some(existingImg => existingImg.url === src);
                         if (!alreadyExists) {
-                            details.images.push({
+                            details.extractedDetails.images.push({
                                 url: src,
                                 type: 'other',
                                 selector: selector,
@@ -816,13 +831,13 @@ async function runDetailScraper() {
             const details = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
             if (details) {
                 // Download and save images to structured directory
-                console.log(`Found ${details.images.length} images for property ${details.propertyId}`);
-                const savedImages = await savePropertyImages(details.propertyId, details.images);
+                console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
+                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images);
                 
                 // Update the details with saved image information
-                details.images = savedImages;
-                details.imagesSaved = savedImages.length;
-                details.imagesDirectory = `./data/properties/${details.propertyId}/images/`;
+                details.extractedDetails.images = savedImages;
+                details.extractedDetails.imagesSaved = savedImages.length;
+                details.extractedDetails.imagesDirectory = `./data/properties/${details.Id}/images/`;
                 
                 // Save only the extracted real estate information
                 detailedProperties.push(details);
