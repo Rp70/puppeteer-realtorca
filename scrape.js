@@ -373,43 +373,59 @@ async function createBackup(originalFile, backupFileName) {
     }
 }
 
-// 6. Image Download Functions
-async function downloadImage(url, filePath) {
+// 6. Image Download Functions (HTTP-based but using browser's User-Agent)
+async function downloadImage(url, filePath, userAgent) {
     return new Promise((resolve, reject) => {
         const parsedUrl = new URL(url);
         const client = parsedUrl.protocol === 'https:' ? https : http;
         
-        const request = client.get(url, (response) => {
-            if (response.statusCode === 200) {
-                const fileStream = require('fs').createWriteStream(filePath);
-                response.pipe(fileStream);
-                
-                fileStream.on('finish', () => {
-                    fileStream.close();
-                    resolve(filePath);
-                });
-                
-                fileStream.on('error', (err) => {
-                    require('fs').unlink(filePath, () => {}); // Delete partial file
-                    reject(err);
-                });
-            } else if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                // Handle redirect
-                downloadImage(response.headers.location, filePath).then(resolve).catch(reject);
-            } else {
-                reject(new Error(`Failed to download image: ${response.statusCode} ${response.statusMessage}`));
+        const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port,
+            path: parsedUrl.pathname + parsedUrl.search,
+            headers: {
+                'User-Agent': userAgent,
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Cache-Control': 'no-cache',
+                'Referer': 'https://www.realtor.ca/',
+                'Host': parsedUrl.hostname
             }
+        };
+        
+        const request = client.get(options, (response) => {
+            // Handle redirects
+            if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                downloadImage(response.headers.location, filePath, userAgent)
+                    .then(resolve)
+                    .catch(reject);
+                return;
+            }
+            
+            if (response.statusCode !== 200) {
+                reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+                return;
+            }
+            
+            const fileStream = require('fs').createWriteStream(filePath);
+            response.pipe(fileStream);
+            
+            fileStream.on('error', reject);
+            fileStream.on('finish', () => {
+                fileStream.close();
+                resolve(filePath);
+            });
         });
         
         request.on('error', reject);
         request.setTimeout(30000, () => {
             request.destroy();
-            reject(new Error('Download timeout'));
+            reject(new Error('Request timeout'));
         });
     });
 }
 
-async function savePropertyImages(propertyId, images) {
+async function savePropertyImages(propertyId, images, userAgent) {
     if (!propertyId || !images || images.length === 0) {
         return [];
     }
@@ -444,7 +460,7 @@ async function savePropertyImages(propertyId, images) {
             const filePath = path.join(imagesDir, filename);
             
             console.log(`Downloading ${image.type} image: ${image.url}`);
-            await downloadImage(image.url, filePath);
+            await downloadImage(image.url, filePath, userAgent);
             
             savedImages.push({
                 ...image,
@@ -473,10 +489,19 @@ async function scrapePropertyDetail(browser, relativeUrl) {
     await page.setViewport({ width: 1280, height: 800 });
     await page.setRequestInterception(true);
 
-    // Apply the same blocking rules as the main scraper for efficiency
+    // Apply selective blocking - allow property images but block other unnecessary resources
     page.on('request', (request) => {
         const url = request.url();
         const resourceType = request.resourceType();
+        
+        // Allow property images from realtor.ca CDN
+        if (resourceType === 'image' && url.includes('realtor.ca')) {
+            // console.log(`[ALLOW PROPERTY IMAGE] ${url.substring(0, 80)}...`);
+            request.continue();
+            return;
+        }
+        
+        // Block other unnecessary resources
         if (
             CONFIG.BLOCKED_RESOURCE_TYPES.includes(resourceType) ||
             CONFIG.BLOCKED_URL_PATTERNS.some(pattern => url.includes(pattern))
@@ -708,8 +733,8 @@ async function scrapePropertyDetail(browser, relativeUrl) {
             return details;
         });
         
-        await page.close();
-        return propertyDetails;
+        // Return both page and details so images can be captured before page closes
+        return { page, details: propertyDetails };
         
     } catch (error) {
         console.error(`Error scraping ${fullUrl}: ${error.message}`);
@@ -792,16 +817,21 @@ async function runDetailScraper() {
             processed++;
             console.log(`Processing ${processed}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
             
-            const details = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
-            if (details) {
-                // Download and save images to structured directory
+            const result = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
+            if (result && result.details) {
+                const { page, details } = result;
+                
+                // Download and save images with proper headers to avoid detection
                 console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
-                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images);
+                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT);
                 
                 // Update the details with saved image information
                 details.extractedDetails.images = savedImages;
                 details.extractedDetails.imagesSaved = savedImages.length;
                 details.extractedDetails.imagesDirectory = `./data/properties/${details.Id}/images/`;
+                
+                // Close the page after processing
+                await page.close();
                 
                 // Save only the extracted real estate information
                 detailedProperties.push(details);
