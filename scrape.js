@@ -542,49 +542,13 @@ async function scrapePropertyDetail(browser, relativeUrl) {
                 }
             }
             
-            // Extract basic property information matching realtor_listings_perfect.json structure
+            // Extract only additional detail information not present in realtor_listings_perfect.json
+            // This avoids duplication of data already available in the main listings file
             const details = {
-                // Top-level fields matching the realtor API structure
+                // Primary identifier to link with main listings data
                 Id: propertyId,
-                MlsNumber: mlsNumber,
-                PublicRemarks: extractText('#propertyDescriptionCon') || extractText('.propertyDescription') || extractText('.listingDescription'),
                 
-                // Building information
-                Building: {
-                    BathroomTotal: dataLayerInfo.bathrooms || extractText('.bathroomsValue') || extractText('[data-bathrooms]'),
-                    Bedrooms: dataLayerInfo.bedrooms || extractText('.bedroomsValue') || extractText('[data-bedrooms]'),
-                    SizeInterior: dataLayerInfo.interiorFloorSpace || extractText('.sqftValue'),
-                    Type: dataLayerInfo.buildingType || extractText('.buildingType'),
-                    Ammenities: dataLayerInfo.buildingAmenities || extractText('.buildingAmenities'),
-                    HalfBathTotal: extractText('.halfBathValue') || "0"
-                },
-                
-                // Property information  
-                Property: {
-                    Price: price,
-                    Type: dataLayerInfo.propertyType || extractText('.propertyType'),
-                    Address: {
-                        AddressText: address,
-                        // Note: Longitude and Latitude would need to be extracted separately if available
-                        PermitShowAddress: true
-                    },
-                    // Parking information
-                    ParkingType: dataLayerInfo.parkingType,
-                    ParkingSpaceTotal: extractText('.parkingSpacesValue'),
-                    OwnershipType: extractText('.ownershipType'),
-                    AmmenitiesNearBy: extractText('.amenitiesNearBy')
-                },
-                
-                // Land information
-                Land: {
-                    SizeTotal: dataLayerInfo.landSize || extractText('.lotSizeValue') || "Unknown"
-                },
-                
-                // Additional extracted fields
-                PostalCode: extractText('.postalCode'),
-                ProvinceName: dataLayerInfo.province || extractText('.province'),
-                
-                // Custom extracted data for our use
+                // Only extracted details unique to detail scraping
                 extractedDetails: {
                     yearBuilt: extractText('.yearBuiltValue') || extractText('[data-year-built]'),
                     neighbourhood: dataLayerInfo.neighbourhood,
