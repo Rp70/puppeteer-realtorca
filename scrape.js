@@ -2,13 +2,29 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('node:fs/promises'); // Use promise version
+const path = require('path');
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
 const geoNames = require('./config/geoNames');
+
 const transactionTypeIds = [
     2, // For sale
     5, // Sold
 ]
 
 puppeteer.use(StealthPlugin());
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+const mode = args[0] || 'list'; // Default to 'list' mode
+
+if (!['list', 'detail'].includes(mode)) {
+    console.error('Usage: node scrape.js [list|detail]');
+    console.error('  list   - Scrape listings from the map URL (default)');
+    console.error('  detail - Extract details from saved listings');
+    process.exit(1);
+}
 
 // State tracking for nested loops
 let currentTransactionIndex = 0;
@@ -73,6 +89,8 @@ const CONFIG = {
     },
     API_URL: 'https://api2.realtor.ca/Listing.svc/PropertySearch_Post',
     OUTPUT_FILE: './data/realtor_listings_perfect.json',
+    DETAIL_FILE: './tmp/detail.html',
+    DETAIL_OUTPUT_FILE: './data/property_details.json',
     BACKUP_DIR: './data/backups',
     getBackupFileName: () => {
         const now = new Date();
@@ -124,7 +142,7 @@ async function loadScraperState() {
     }
 }
 
-async function saveScraperState() {
+async function saveScraperState(detailProgress = null) {
     try {
         // Ensure data directory exists
         await fs.mkdir('./data', { recursive: true });
@@ -136,9 +154,18 @@ async function saveScraperState() {
             lastUpdated: new Date().toISOString()
         };
         
+        // Add detail progress if provided
+        if (detailProgress) {
+            state.detailProgress = detailProgress;
+        }
+        
         await fs.writeFile(CONFIG.STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
         const currentGeoName = geoNames[currentGeoIndex] ? geoNames[currentGeoIndex].GeoName : 'N/A';
         console.log(`State saved: Transaction Index ${currentTransactionIndex}, Geo Index: ${currentGeoIndex} (${currentGeoName}), Page Index: ${currentPage}`);
+        
+        if (detailProgress) {
+            console.log(`Detail progress: ${detailProgress.processedPropertyIds.length} properties processed`);
+        }
     } catch (error) {
         console.warn(`Failed to save scraper state: ${error.message}`);
     }
@@ -161,6 +188,36 @@ async function resetScraperState() {
     } catch (error) {
         console.warn(`Failed to reset scraper state: ${error.message}`);
     }
+}
+
+async function loadDetailProgress() {
+    try {
+        const stateContent = await fs.readFile(CONFIG.STATE_FILE, 'utf8');
+        const state = JSON.parse(stateContent);
+        
+        if (state.detailProgress && Array.isArray(state.detailProgress.processedPropertyIds)) {
+            console.log(`Resuming detail scraping from ${state.detailProgress.processedPropertyIds.length} processed properties`);
+            return state.detailProgress;
+        }
+    } catch (error) {
+        console.log("No existing detail progress found. Starting from beginning.");
+    }
+    
+    return {
+        processedPropertyIds: [],
+        lastProcessedIndex: -1,
+        lastUpdated: new Date().toISOString()
+    };
+}
+
+async function saveDetailProgress(processedPropertyIds, currentIndex) {
+    const detailProgress = {
+        processedPropertyIds: processedPropertyIds,
+        lastProcessedIndex: currentIndex,
+        lastUpdated: new Date().toISOString()
+    };
+    
+    await saveScraperState(detailProgress);
 }
 
 // 3. Core Logic Function
@@ -316,9 +373,528 @@ async function createBackup(originalFile, backupFileName) {
     }
 }
 
-// 6. Main Orchestration Function
+// 6. Image Download Functions
+async function downloadImage(url, filePath) {
+    return new Promise((resolve, reject) => {
+        const parsedUrl = new URL(url);
+        const client = parsedUrl.protocol === 'https:' ? https : http;
+        
+        const request = client.get(url, (response) => {
+            if (response.statusCode === 200) {
+                const fileStream = require('fs').createWriteStream(filePath);
+                response.pipe(fileStream);
+                
+                fileStream.on('finish', () => {
+                    fileStream.close();
+                    resolve(filePath);
+                });
+                
+                fileStream.on('error', (err) => {
+                    require('fs').unlink(filePath, () => {}); // Delete partial file
+                    reject(err);
+                });
+            } else if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                // Handle redirect
+                downloadImage(response.headers.location, filePath).then(resolve).catch(reject);
+            } else {
+                reject(new Error(`Failed to download image: ${response.statusCode} ${response.statusMessage}`));
+            }
+        });
+        
+        request.on('error', reject);
+        request.setTimeout(30000, () => {
+            request.destroy();
+            reject(new Error('Download timeout'));
+        });
+    });
+}
+
+async function savePropertyImages(propertyId, images) {
+    if (!propertyId || !images || images.length === 0) {
+        return [];
+    }
+    
+    const propertyDir = `./data/properties/${propertyId}`;
+    const imagesDir = `${propertyDir}/images`;
+    
+    // Create directories
+    await fs.mkdir(imagesDir, { recursive: true });
+    
+    const savedImages = [];
+    
+    for (let i = 0; i < images.length; i++) {
+        const image = images[i];
+        try {
+            // Extract file extension from URL
+            const urlPath = new URL(image.url).pathname;
+            const extension = path.extname(urlPath) || '.jpg';
+            
+            // Generate filename based on type and index
+            let filename;
+            if (image.type === 'hero') {
+                filename = `hero${extension}`;
+            } else if (image.type === 'grid') {
+                filename = `grid_${(image.index || i).toString().padStart(2, '0')}${extension}`;
+            } else if (image.type === 'gallery') {
+                filename = `gallery_${(image.index || i).toString().padStart(2, '0')}${extension}`;
+            } else {
+                filename = `image_${i.toString().padStart(2, '0')}${extension}`;
+            }
+            
+            const filePath = path.join(imagesDir, filename);
+            
+            console.log(`Downloading ${image.type} image: ${image.url}`);
+            await downloadImage(image.url, filePath);
+            
+            savedImages.push({
+                ...image,
+                localPath: filePath,
+                filename: filename
+            });
+            
+            console.log(`Saved: ${filename}`);
+            
+        } catch (error) {
+            console.warn(`Failed to download image ${image.url}: ${error.message}`);
+            // Continue with other images even if one fails
+        }
+    }
+    
+    return savedImages;
+}
+
+// 7. Detail Scraping Functions
+async function scrapePropertyDetail(browser, relativeUrl) {
+    const fullUrl = `https://www.realtor.ca${relativeUrl}`;
+    console.log(`Scraping detail page: ${fullUrl}`);
+    
+    const page = await browser.newPage();
+    await page.setUserAgent(CONFIG.USER_AGENT);
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setRequestInterception(true);
+
+    // Apply the same blocking rules as the main scraper for efficiency
+    page.on('request', (request) => {
+        const url = request.url();
+        const resourceType = request.resourceType();
+        if (
+            CONFIG.BLOCKED_RESOURCE_TYPES.includes(resourceType) ||
+            CONFIG.BLOCKED_URL_PATTERNS.some(pattern => url.includes(pattern))
+        ) {
+            // console.log(`[BLOCK] ${resourceType} ${url.substring(0, 60)}...`);
+            request.abort();
+        } else {
+            // console.log(`[ALLOW] ${resourceType} ${url.substring(0, 60)}...`);
+            request.continue();
+        }
+    });
+    
+    try {
+        await page.goto(fullUrl, {
+            waitUntil: 'networkidle0',
+            timeout: CONFIG.TIMEOUT_MS
+        });
+        
+        // Get the full HTML content
+        const htmlContent = await page.content();
+        
+        // Ensure tmp directory exists before saving detail file
+        await fs.mkdir(path.dirname(CONFIG.DETAIL_FILE), { recursive: true });
+        
+        // Save to detail file
+        await fs.writeFile(CONFIG.DETAIL_FILE, htmlContent, 'utf8');
+        
+        // Extract property information from the page
+        const propertyDetails = await page.evaluate(() => {
+            const extractText = (selector) => {
+                const element = document.querySelector(selector);
+                return element ? element.textContent.trim() : null;
+            };
+            
+            const extractAttribute = (selector, attribute) => {
+                const element = document.querySelector(selector);
+                return element ? element.getAttribute(attribute) : null;
+            };
+            
+            const extractMultiple = (selector) => {
+                const elements = document.querySelectorAll(selector);
+                return Array.from(elements).map(el => el.textContent.trim()).filter(text => text.length > 0);
+            };
+            
+            // Extract price
+            const price = extractText('#listingPriceValue') || extractText('[data-value-cad]') || extractText('.listingPrice');
+            
+            // Extract address
+            const address = extractText('#listingAddress') || extractText('h1');
+            
+            // Extract MLS number
+            const mlsNumber = extractText('#MLNumberVal') || extractText('#mlsNumber');
+            
+            // Extract property ID from URL or data attributes
+            const propertyId = window.location.pathname.match(/\/(\d+)\//)?.[1] || extractAttribute('[data-property-id]', 'data-property-id');
+            
+            // Extract from dataLayer if available
+            let dataLayerInfo = {};
+            if (typeof window.dataLayer !== 'undefined' && window.dataLayer.length > 0) {
+                const propertyData = window.dataLayer.find(layer => layer.property);
+                if (propertyData && propertyData.property) {
+                    dataLayerInfo = propertyData.property;
+                }
+            }
+            
+            // Extract basic property information with better selectors
+            const details = {
+                propertyId: propertyId,
+                mlsNumber: mlsNumber,
+                price: price,
+                address: address,
+                city: dataLayerInfo.city || extractText('.city'),
+                province: dataLayerInfo.province || extractText('.province'),
+                postalCode: extractText('.postalCode'),
+                propertyType: dataLayerInfo.propertyType || extractText('.propertyType'),
+                buildingType: dataLayerInfo.buildingType || extractText('.buildingType'),
+                bedrooms: dataLayerInfo.bedrooms || extractText('.bedroomsValue') || extractText('[data-bedrooms]'),
+                bathrooms: dataLayerInfo.bathrooms || extractText('.bathroomsValue') || extractText('[data-bathrooms]'),
+                sqft: dataLayerInfo.interiorFloorSpace || extractText('.sqftValue'),
+                lotSize: dataLayerInfo.landSize || extractText('.lotSizeValue'),
+                yearBuilt: extractText('.yearBuiltValue') || extractText('[data-year-built]'),
+                neighbourhood: dataLayerInfo.neighbourhood,
+                parkingType: dataLayerInfo.parkingType,
+                buildingAmenities: dataLayerInfo.buildingAmenities,
+                buildingStyle: dataLayerInfo.buildingStyle,
+                
+                // Description
+                description: extractText('#propertyDescriptionCon') || extractText('.propertyDescription') || extractText('.listingDescription'),
+                
+                // Property details from various sections
+                propertyDetails: {},
+                
+                // Features and amenities
+                features: [],
+                
+                // Images
+                images: [],
+                
+                // Agent information
+                agent: {
+                    name: extractText('.realtorCardName') || extractText('.agentName'),
+                    phone: extractText('.realtorCardPhone') || extractText('.agentPhone'),
+                    email: extractText('.realtorCardEmail') || extractText('.agentEmail'),
+                    company: extractText('.realtorCardOfficeName') || extractText('.agentCompany')
+                },
+                
+                // Scraped timestamp and URL
+                scrapedAt: new Date().toISOString(),
+                sourceUrl: window.location.href
+            };
+            
+            // Extract property details from multiple possible table structures
+            const detailSelectors = [
+                '.propertyDetailsTable tr',
+                '.property-details-table tr',
+                '.listingDetailsTable tr',
+                '.propertyDetailsSectionContentSubCon',
+                '.propertyDetailsValueSubSectionCon'
+            ];
+            
+            detailSelectors.forEach(selector => {
+                const rows = document.querySelectorAll(selector);
+                rows.forEach(row => {
+                    let label, value;
+                    
+                    if (selector.includes('SubCon')) {
+                        // Handle property details sections
+                        label = row.querySelector('.propertyDetailsSectionContentLabel, .propertyDetailsValueSubSectionHeader');
+                        value = row.querySelector('.propertyDetailsSectionContentValue, .propertyDetailsValueSubSectionValue');
+                    } else {
+                        // Handle table rows
+                        label = row.querySelector('td:first-child, th:first-child, .label');
+                        value = row.querySelector('td:last-child, td:nth-child(2), .value');
+                    }
+                    
+                    if (label && value && label.textContent && value.textContent) {
+                        const key = label.textContent.trim().replace(':', '').replace(/\s+/g, '_');
+                        const val = value.textContent.trim();
+                        if (key && val && key !== val) {
+                            details.propertyDetails[key] = val;
+                        }
+                    }
+                });
+            });
+            
+            // Extract features from multiple possible selectors
+            const featureSelectors = [
+                '.featureList li',
+                '.propertyFeatures li',
+                '.amenities li',
+                '.features li',
+                '.listingFeatures li'
+            ];
+            
+            featureSelectors.forEach(selector => {
+                const features = extractMultiple(selector);
+                details.features = details.features.concat(features);
+            });
+            
+            // Remove duplicates from features
+            details.features = [...new Set(details.features)];
+            
+            // Extract images with specific types and roles
+            const imageTypes = {
+                hero: [],
+                grid: [],
+                gallery: []
+            };
+            
+            // Extract hero image
+            const heroImage = document.querySelector('img#heroImage');
+            if (heroImage) {
+                const src = heroImage.src || heroImage.getAttribute('data-src') || heroImage.getAttribute('data-original');
+                if (src && src.includes('realtor.ca')) {
+                    imageTypes.hero.push({
+                        url: src,
+                        type: 'hero'
+                    });
+                }
+            }
+            
+            // Extract grid view listing images (multiple images possible)
+            const gridImages = document.querySelectorAll('img.topGridViewListingImage');
+            gridImages.forEach((gridImage, index) => {
+                const src = gridImage.src || gridImage.getAttribute('data-src') || gridImage.getAttribute('data-original');
+                if (src && src.includes('realtor.ca')) {
+                    imageTypes.grid.push({
+                        url: src,
+                        type: 'grid',
+                        index: index
+                    });
+                }
+            });
+            
+            // Extract gallery images from sidebar
+            const galleryImages = document.querySelectorAll('img.gridViewListingImage');
+            galleryImages.forEach((img, index) => {
+                const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-original');
+                if (src && src.includes('realtor.ca')) {
+                    // Check if this image is already a hero or grid image
+                    const isHeroImage = imageTypes.hero.some(heroImg => heroImg.url === src);
+                    const isGridImage = imageTypes.grid.some(gridImg => gridImg.url === src);
+                    
+                    // Only add to gallery if it's not already a hero or grid image
+                    if (!isHeroImage && !isGridImage) {
+                        imageTypes.gallery.push({
+                            url: src,
+                            type: 'gallery',
+                            index: index
+                        });
+                    }
+                }
+            });
+            
+            // Combine all images into a single array with metadata
+            details.images = [
+                ...imageTypes.hero,
+                ...imageTypes.grid,
+                ...imageTypes.gallery
+            ];
+            
+            // Also extract any remaining images as fallback
+            const fallbackSelectors = [
+                '.propertyPhoto img',
+                '.listing-photo img',
+                '.gallery img:not([class*="imageGallerySidebarPhoto"])',
+                '.listingPhoto img',
+                '.photoGallery img'
+            ];
+            
+            fallbackSelectors.forEach(selector => {
+                const imageElements = document.querySelectorAll(selector);
+                imageElements.forEach((img, index) => {
+                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-original');
+                    if (src && !src.includes('placeholder') && !src.includes('icon') && src.includes('realtor.ca')) {
+                        // Check if this image is already in our typed images
+                        const alreadyExists = details.images.some(existingImg => existingImg.url === src);
+                        if (!alreadyExists) {
+                            details.images.push({
+                                url: src,
+                                type: 'other',
+                                selector: selector,
+                                index: index
+                            });
+                        }
+                    }
+                });
+            });
+            
+            return details;
+        });
+        
+        await page.close();
+        return propertyDetails;
+        
+    } catch (error) {
+        console.error(`Error scraping ${fullUrl}: ${error.message}`);
+        await page.close();
+        return null;
+    }
+}
+
+async function runDetailScraper() {
+    console.log("Starting detail scraper...");
+    
+    // Load detail progress
+    const detailProgress = await loadDetailProgress();
+    
+    // Read the listings file
+    let listingsData;
+    try {
+        const content = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
+        listingsData = JSON.parse(content);
+    } catch (error) {
+        console.error(`Error reading listings file: ${error.message}`);
+        return;
+    }
+    
+    if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+        console.error("No results found in listings file");
+        return;
+    }
+    
+    // Filter items with RelativeDetailsURL
+    const itemsWithDetails = listingsData.Results.filter(item => item.RelativeDetailsURL);
+    console.log(`Found ${itemsWithDetails.length} listings with detail URLs`);
+    
+    if (itemsWithDetails.length === 0) {
+        console.log("No listings with detail URLs found");
+        return;
+    }
+    
+    // Filter out already processed items based on property ID
+    const itemsToProcess = itemsWithDetails.filter(item => {
+        const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
+        return propertyId && !detailProgress.processedPropertyIds.includes(propertyId);
+    });
+    
+    console.log(`Found ${itemsToProcess.length} new items to process (${detailProgress.processedPropertyIds.length} already processed)`);
+    
+    if (itemsToProcess.length === 0) {
+        console.log("All items have already been processed");
+        return;
+    }
+    
+    // Launch browser
+    console.log(`Launching browser for detail scraping (Headless: ${CONFIG.HEADLESS})...`);
+    const browser = await puppeteer.launch({
+        headless: CONFIG.HEADLESS,
+        executablePath: CONFIG.EXECUTABLE_PATH,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        ignoreHTTPSErrors: true,
+    });
+    
+    // Load existing processed properties
+    let detailedProperties = [];
+    try {
+        const existingContent = await fs.readFile(CONFIG.DETAIL_OUTPUT_FILE, 'utf8');
+        const existingData = JSON.parse(existingContent);
+        if (existingData.properties && Array.isArray(existingData.properties)) {
+            detailedProperties = existingData.properties;
+        }
+    } catch (error) {
+        console.log("No existing detail output file found, starting fresh");
+    }
+    
+    let processed = detailProgress.processedPropertyIds.length;
+    
+    try {
+        for (let i = 0; i < itemsToProcess.length; i++) {
+            const item = itemsToProcess[i];
+            const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
+            
+            processed++;
+            console.log(`Processing ${processed}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
+            
+            const details = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
+            if (details) {
+                // Download and save images to structured directory
+                console.log(`Found ${details.images.length} images for property ${details.propertyId}`);
+                const savedImages = await savePropertyImages(details.propertyId, details.images);
+                
+                // Update the details with saved image information
+                details.images = savedImages;
+                details.imagesSaved = savedImages.length;
+                details.imagesDirectory = `./data/properties/${details.propertyId}/images/`;
+                
+                // Save only the extracted real estate information
+                detailedProperties.push(details);
+                
+                // Add to processed property IDs
+                if (propertyId) {
+                    detailProgress.processedPropertyIds.push(propertyId);
+                }
+                
+                // Save progress after every scrape (both detail output and state)
+                await fs.writeFile(
+                    CONFIG.DETAIL_OUTPUT_FILE, 
+                    JSON.stringify({
+                        totalProcessed: processed,
+                        totalItems: itemsWithDetails.length,
+                        scrapedAt: new Date().toISOString(),
+                        properties: detailedProperties
+                    }, null, 2), 
+                    'utf8'
+                );
+                
+                // Save detail progress to state file
+                await saveDetailProgress(detailProgress.processedPropertyIds, i);
+                
+                console.log(`Progress saved: ${processed}/${itemsWithDetails.length} processed (${savedImages.length} images saved)`);
+            }
+            
+            // Add delay between requests
+            const sleepMs = CONFIG.getSleepBetweenPages();
+            console.log(`Waiting ${sleepMs / 1000} seconds before next detail page...`);
+            await new Promise(resolve => setTimeout(resolve, sleepMs));
+        }
+        
+        // Save final results
+        await fs.writeFile(
+            CONFIG.DETAIL_OUTPUT_FILE, 
+            JSON.stringify({
+                totalProcessed: processed,
+                totalItems: itemsWithDetails.length,
+                scrapedAt: new Date().toISOString(),
+                properties: detailedProperties
+            }, null, 2), 
+            'utf8'
+        );
+        
+        // Clear detail progress from state since we're done
+        if (itemsToProcess.length > 0) {
+            await saveDetailProgress([], -1);
+        }
+        
+        console.log(`Detail scraping completed. Processed ${processed} total properties (${itemsToProcess.length} new).`);
+        console.log(`Results saved to: ${CONFIG.DETAIL_OUTPUT_FILE}`);
+        
+    } catch (error) {
+        console.error(`Detail scraping error: ${error.message}`);
+    } finally {
+        await browser.close();
+    }
+}
+
+// 7. Main Orchestration Function
 async function main() {
-     console.log("Script start.");
+     console.log(`Script start in ${mode} mode.`);
+     
+     // Handle detail mode
+     if (mode === 'detail') {
+         await runDetailScraper();
+         console.log("Detail scraping completed.");
+         return;
+     }
+     
+     // List mode (original functionality)
      let browser;
      
      // Load scraper state if resuming
