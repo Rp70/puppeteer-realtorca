@@ -40,6 +40,9 @@ let currentPage = 0;
 let consecutiveErrorCount = 0;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
+// In-memory cache for listings data (for fast image update checks)
+let cachedListingsData = null;
+
 // 2. Central Configuration
 const CONFIG = {
     MAP_URL: () => {
@@ -412,6 +415,10 @@ async function saveData(data, filePath, isFirstPage = false) {
      
       // Best Practice: Async file IO
       await fs.writeFile(filePath, JSON.stringify(allData, null, 2), 'utf8');
+      
+      // Update cached data with the saved data
+      cachedListingsData = allData;
+      
       console.log(`Data saved: ${filePath}`);
       console.log(`Total unique listings so far: ${allData.Results?.length || 0}`);
 }
@@ -485,53 +492,151 @@ async function downloadImage(url, filePath, userAgent) {
     });
 }
 
-// Helper function to check if images need to be updated based on PhotoChangeDateUTC
+// Cache Management Functions
+async function loadCachedListingsData() {
+    if (cachedListingsData) {
+        console.log("Using existing cached listings data");
+        return cachedListingsData;
+    }
+    
+    try {
+        const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
+        cachedListingsData = JSON.parse(existingContent);
+        console.log(`Loaded ${cachedListingsData.Results?.length || 0} cached listings into memory`);
+        return cachedListingsData;
+    } catch (error) {
+        console.log("No existing listings file found. Starting with empty cache.");
+        cachedListingsData = { Results: [] };
+        return cachedListingsData;
+    }
+}
+
+function updateCachedListingsData(newData) {
+    if (!cachedListingsData) {
+        cachedListingsData = { Results: [] };
+    }
+    
+    if (newData.Results && Array.isArray(newData.Results)) {
+        // Create a Map for efficient deduplication by Id
+        const resultsMap = new Map();
+        
+        // First, add all existing cached results to the map
+        cachedListingsData.Results.forEach(result => {
+            if (result.Id) {
+                resultsMap.set(result.Id, result);
+            }
+        });
+        
+        // Then add/update with new results (this will overwrite duplicates with newer data)
+        newData.Results.forEach(result => {
+            if (result.Id) {
+                resultsMap.set(result.Id, result);
+            }
+        });
+        
+        // Convert map back to array
+        cachedListingsData.Results = Array.from(resultsMap.values());
+        
+        // Update other properties from the latest response
+        Object.keys(newData).forEach(key => {
+            if (key !== 'Results') {
+                cachedListingsData[key] = newData[key];
+            }
+        });
+        
+        console.log(`Updated cached listings data: ${cachedListingsData.Results?.length || 0} total listings`);
+    }
+}
+
+// Fast image update check using cached data
+function shouldUpdateImagesFromCache(propertyId, newPhotoChangeDateUTC) {
+    if (!newPhotoChangeDateUTC) {
+        console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, skipping detail scraping`);
+        return false;
+    }
+    
+    if (!cachedListingsData || !cachedListingsData.Results || !Array.isArray(cachedListingsData.Results)) {
+        console.log(`No cached listings data, will scrape details for property ${propertyId}`);
+        return true;
+    }
+    
+    // Find the existing listing for this property in cache
+    const existingListing = cachedListingsData.Results.find(item => item.Id === propertyId);
+    
+    if (!existingListing) {
+        console.log(`Property ${propertyId} not found in cached listings, will scrape details`);
+        return true;
+    }
+    
+    const existingPhotoChangeDateUTC = existingListing.PhotoChangeDateUTC;
+    
+    if (!existingPhotoChangeDateUTC) {
+        console.log(`No existing PhotoChangeDateUTC for property ${propertyId}, will scrape details`);
+        return true;
+    }
+    
+    // Parse dates and compare
+    const existingDate = new Date(existingPhotoChangeDateUTC);
+    const newDate = new Date(newPhotoChangeDateUTC);
+    
+    if (newDate > existingDate) {
+        console.log(`PhotoChangeDateUTC is newer for property ${propertyId} (${newPhotoChangeDateUTC} > ${existingPhotoChangeDateUTC}), will scrape details`);
+        return true;
+    } else {
+        console.log(`PhotoChangeDateUTC is same or older for property ${propertyId} (${newPhotoChangeDateUTC} <= ${existingPhotoChangeDateUTC}), skipping detail scraping`);
+        return false;
+    }
+}
+
+// Helper function to check if images need to be updated based on PhotoChangeDateUTC (uses cached data)
 async function shouldUpdateImages(propertyId, newPhotoChangeDateUTC) {
     if (!newPhotoChangeDateUTC) {
         console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, skipping image download`);
         return false;
     }
     
-    try {
-        // Read existing listings to find current PhotoChangeDateUTC
-        const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
-        const listingsData = JSON.parse(existingContent);
-        
-        if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+    // Use cached data if available, otherwise load from file
+    let listingsData = cachedListingsData;
+    if (!listingsData) {
+        try {
+            const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
+            listingsData = JSON.parse(existingContent);
+        } catch (error) {
             console.log(`No existing listings found, will download images for property ${propertyId}`);
             return true;
         }
-        
-        // Find the existing listing for this property
-        const existingListing = listingsData.Results.find(item => item.Id === propertyId);
-        
-        if (!existingListing) {
-            console.log(`Property ${propertyId} not found in existing listings, will download images`);
-            return true;
-        }
-        
-        const existingPhotoChangeDateUTC = existingListing.PhotoChangeDateUTC;
-        
-        if (!existingPhotoChangeDateUTC) {
-            console.log(`No existing PhotoChangeDateUTC for property ${propertyId}, will download images`);
-            return true;
-        }
-        
-        // Parse dates and compare
-        const existingDate = new Date(existingPhotoChangeDateUTC);
-        const newDate = new Date(newPhotoChangeDateUTC);
-        
-        if (newDate > existingDate) {
-            console.log(`PhotoChangeDateUTC is newer for property ${propertyId} (${newPhotoChangeDateUTC} > ${existingPhotoChangeDateUTC}), will update images`);
-            return true;
-        } else {
-            console.log(`PhotoChangeDateUTC is same or older for property ${propertyId} (${newPhotoChangeDateUTC} <= ${existingPhotoChangeDateUTC}), skipping image download`);
-            return false;
-        }
-        
-    } catch (error) {
-        console.warn(`Error checking PhotoChangeDateUTC for property ${propertyId}: ${error.message}, will download images`);
+    }
+    
+    if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+        console.log(`No existing listings found, will download images for property ${propertyId}`);
         return true;
+    }
+    
+    // Find the existing listing for this property
+    const existingListing = listingsData.Results.find(item => item.Id === propertyId);
+    
+    if (!existingListing) {
+        console.log(`Property ${propertyId} not found in existing listings, will download images`);
+        return true;
+    }
+    
+    const existingPhotoChangeDateUTC = existingListing.PhotoChangeDateUTC;
+    
+    if (!existingPhotoChangeDateUTC) {
+        console.log(`No existing PhotoChangeDateUTC for property ${propertyId}, will download images`);
+        return true;
+    }
+    
+    // Parse dates and compare
+    const existingDate = new Date(existingPhotoChangeDateUTC);
+    const newDate = new Date(newPhotoChangeDateUTC);
+    
+    if (newDate > existingDate) {
+        console.log(`PhotoChangeDateUTC is newer for property ${propertyId} (${newPhotoChangeDateUTC} > ${existingPhotoChangeDateUTC}), will update images`);
+        return true;
+    } else {
+        console.log(`PhotoChangeDateUTC is same or older for property ${propertyId} (${newPhotoChangeDateUTC} <= ${existingPhotoChangeDateUTC}), skipping image download`);
+        return false;
     }
 }
 
@@ -945,6 +1050,30 @@ async function runDetailScrapingForPage(pageResults, browser, pageData) {
             const item = itemsWithDetails[i];
             const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
             
+            console.log(`Checking detail ${i + 1}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
+            
+            // Fast check: Should we scrape details based on PhotoChangeDateUTC?
+            const shouldScrapeDetails = shouldUpdateImagesFromCache(propertyId, item.PhotoChangeDateUTC);
+            
+            if (!shouldScrapeDetails) {
+                console.log(`Skipping detail scraping for property ${propertyId} - no updates needed`);
+                
+                // Copy existing details from cache if available
+                const existingListing = cachedListingsData.Results.find(cached => cached.Id === propertyId);
+                if (existingListing && existingListing.extractedDetails) {
+                    item.extractedDetails = existingListing.extractedDetails;
+                    console.log(`Copied existing extractedDetails for property ${propertyId} from cache`);
+                }
+                
+                // Still save data to ensure this item is included in the current page
+                console.log(`Saving data after skipping property ${propertyId} details...`);
+                updateCachedListingsData(pageData);
+                await saveData(pageData, CONFIG.OUTPUT_FILE);
+                console.log(`Data saved after skipping property ${propertyId} detail processing`);
+                
+                continue;
+            }
+            
             console.log(`Processing detail ${i + 1}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
             
             let result;
@@ -1007,6 +1136,7 @@ async function runDetailScrapingForPage(pageResults, browser, pageData) {
                 
                 // SAVE DATA AFTER EACH PROPERTY DETAIL IS SUCCESSFULLY PROCESSED
                 console.log(`Saving data after processing property ${propertyId} details...`);
+                updateCachedListingsData(pageData);
                 await saveData(pageData, CONFIG.OUTPUT_FILE);
                 console.log(`Data saved after property ${propertyId} detail processing`);
             }
@@ -1042,6 +1172,9 @@ async function main() {
      // Create backup of existing file before starting
      const backupFileName = CONFIG.getBackupFileName();
      await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
+     
+     // Load cached listings data for fast image update checks
+     await loadCachedListingsData();
      
      try {
         console.log(`Launching browser (Headless: ${CONFIG.HEADLESS})...`);
