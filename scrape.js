@@ -15,12 +15,11 @@ const transactionTypeIds = [
 
 puppeteer.use(StealthPlugin());
 
-// Parse command line arguments - now supports both modes in sequence
+// Parse command line arguments
 const args = process.argv.slice(2);
-const skipListings = args.includes('--skip-listings'); // Optional flag to skip listings and only do details
 
 if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: node scrape.js [--skip-listings]');
+    console.log('Usage: node scrape.js');
     console.log('');
     console.log('The script runs in integrated mode:');
     console.log('  1. Scrapes each page of listings from realtor.ca API');
@@ -28,7 +27,6 @@ if (args.includes('--help') || args.includes('-h')) {
     console.log('  3. Merges and saves both listings and details together per page');
     console.log('');
     console.log('Options:');
-    console.log('  --skip-listings  Skip the listings phase and only process remaining details');
     console.log('  --help, -h       Show this help message');
     process.exit(0);
 }
@@ -113,6 +111,9 @@ const CONFIG = {
     },
     USER_AGENT: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
     TIMEOUT_MS: 60000, // For navigation and waiting for response
+    // --- Retry Configuration ---
+    MAX_RETRY_ATTEMPTS: 2,     // 1 initial attempt + 2 retries = 3 total attempts
+    RETRY_DELAY_MS: 5000,      // 5-second delay between retry attempts
     getSleepBetweenPages: () => {
         // Randomize between 60-80 seconds (60000-80000 ms)
         const minMs = 60000;
@@ -152,7 +153,7 @@ async function loadScraperState() {
     }
 }
 
-async function saveScraperState(detailProgress = null) {
+async function saveScraperState() {
     try {
         // Ensure data directory exists
         await fs.mkdir('./data', { recursive: true });
@@ -164,18 +165,9 @@ async function saveScraperState(detailProgress = null) {
             lastUpdated: new Date().toISOString()
         };
         
-        // Add detail progress if provided
-        if (detailProgress) {
-            state.detailProgress = detailProgress;
-        }
-        
         await fs.writeFile(CONFIG.STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
         const currentGeoName = geoNames[currentGeoIndex] ? geoNames[currentGeoIndex].GeoName : 'N/A';
         console.log(`State saved: Transaction Index ${currentTransactionIndex}, Geo Index: ${currentGeoIndex} (${currentGeoName}), Page Index: ${currentPage}`);
-        
-        if (detailProgress) {
-            console.log(`Detail progress: ${detailProgress.processedPropertyIds.length} properties processed`);
-        }
     } catch (error) {
         console.warn(`Failed to save scraper state: ${error.message}`);
     }
@@ -230,88 +222,135 @@ function isServerError(statusCode) {
     return statusCode >= 400 && statusCode <= 599;
 }
 
-// 3. Core Logic Function
+// 3. Core Logic Function with Retry Pattern
 async function runScraper(browser, mapUrl) {
-     console.log("Setting up page...");
-     const page = await browser.newPage();
-     await page.setUserAgent(CONFIG.USER_AGENT);
-     await page.setViewport({ width: 1280, height: 800 }); // Consistent viewport
-     await page.setRequestInterception(true);
+    let page;
+    let lastError = null;
 
-      // Efficiency: Block resources
-      page.on('request', (request) => {
-         const url = request.url();
-         const resourceType = request.resourceType();
-          if (
-             CONFIG.BLOCKED_RESOURCE_TYPES.includes(resourceType) ||
-             CONFIG.BLOCKED_URL_PATTERNS.some(pattern => url.includes(pattern))
-            ) {
-              // console.log(`[BLOCK] ${resourceType} ${url.substring(0, 60)}...`);
-               request.abort();
-          } else {
-               // console.log(`[ALLOW] ${resourceType} ${url.substring(0, 60)}...`);
-               request.continue();
-          }
-     });
+    for (let attempt = 1; attempt <= CONFIG.MAX_RETRY_ATTEMPTS + 1; attempt++) {
+        console.log(`--- Scraping Attempt #${attempt} of ${CONFIG.MAX_RETRY_ATTEMPTS + 1} ---`);
+        try {
+            if (page && !page.isClosed()) {
+                console.log("Closing previous page before new attempt...");
+                await page.close();
+            }
+            
+            console.log("Setting up new page for attempt...");
+            page = await browser.newPage();
+            
+            // Add page error listeners for debugging
+            page.on('pageerror', function(err) {
+                const theTempValue = err.toString();
+                console.log(`[PAGE JS ERROR on attempt #${attempt}]: ${theTempValue}`);
+            });
+            page.on('error', function(err) { 
+                const theTempValue = err.toString();
+                console.log(`[PAGE CRASH/OTHER ERROR on attempt #${attempt}]: ${theTempValue}`);
+            });
 
-     console.log(`Waiting for API: ${CONFIG.API_URL}`);
-      // Best Practice: Idiomatic Wait
-     const apiResponsePromise = page.waitForResponse(
-          (response) => response.url() === CONFIG.API_URL && response.request().method() === 'POST',
-         { timeout: CONFIG.TIMEOUT_MS }
-     );
+            await page.setUserAgent(CONFIG.USER_AGENT);
+            await page.setViewport({ width: 1280, height: 800 }); // Consistent viewport
+            await page.setRequestInterception(true);
 
-     console.log(`Navigating to: ${mapUrl}`);
-      await page.goto(mapUrl, {
-          waitUntil: 'networkidle0', // Efficiency: Wait only for essential network calls
-         timeout: CONFIG.TIMEOUT_MS,
-      });
+            // Efficiency: Block resources
+            page.on('request', (request) => {
+                const url = request.url();
+                const resourceType = request.resourceType();
+                if (
+                    CONFIG.BLOCKED_RESOURCE_TYPES.includes(resourceType) ||
+                    CONFIG.BLOCKED_URL_PATTERNS.some(pattern => url.includes(pattern))
+                ) {
+                    request.abort();
+                } else {
+                    request.continue();
+                }
+            });
 
-       // Optional scroll trigger
-      try {
-            await page.evaluate(() => window.scrollBy(0, 100));
-        } catch (e) { /* ignore scroll errors */ }
+            console.log(`Waiting for API: ${CONFIG.API_URL}`);
+            // Best Practice: Idiomatic Wait
+            const apiResponsePromise = page.waitForResponse(
+                (response) => response.url() === CONFIG.API_URL && response.request().method() === 'POST',
+                { timeout: CONFIG.TIMEOUT_MS }
+            );
 
-       console.log("Awaiting API response...");
-       const response = await apiResponsePromise; // Wait for the specific response
+            console.log(`Navigating to: ${mapUrl} (Timeout: ${CONFIG.TIMEOUT_MS / 1000}s)`);
+            await page.goto(mapUrl, {
+                waitUntil: 'networkidle0', // Efficiency: Wait only for essential network calls
+                timeout: CONFIG.TIMEOUT_MS,
+            });
+            console.log("Navigation complete for this attempt.");
 
-       console.log(`API Response Status: ${response.status()}`);
-       if (!response.ok()) {
-           const text = await response.text();
-           
-           // Check if it's a server error (4xx or 5xx)
-           if (isServerError(response.status())) {
-               await page.close();
-               await handleServerError(`API ${response.status()}`, `${response.statusText()}. Body: ${text.substring(0, 200)}`);
-               return { shouldRetry: true };
-           }
-           
-           throw new Error(`API HTTP Error ${response.status()} ${response.statusText()}. Body: ${text.substring(0, 200)}`);
+            // Optional scroll trigger
+            try {
+                await page.evaluate(() => window.scrollBy(0, 100));
+                console.log("Page scrolled.");
+            } catch (e) { 
+                console.warn("Scroll failed, continuing...");
+            }
+
+            console.log(`Awaiting API response (Timeout: ${CONFIG.TIMEOUT_MS / 1000}s)...`);
+            const response = await apiResponsePromise; // Wait for the specific response
+
+            console.log(`API Response Status: ${response.status()}`);
+            if (!response.ok()) {
+                const text = await response.text();
+                const errorMsg = `API HTTP Error ${response.status()} ${response.statusText()}. Body: ${text.substring(0, 200)}`;
+                console.error(errorMsg);
+                
+                // Check if it's a server error (4xx or 5xx)
+                if (isServerError(response.status())) {
+                    if (page && !page.isClosed()) await page.close();
+                    await handleServerError(`API ${response.status()}`, `${response.statusText()}. Body: ${text.substring(0, 200)}`);
+                    return { shouldRetry: true };
+                }
+                
+                throw new Error(errorMsg);
+            }
+
+            const data = await response.json(); // Throws if JSON is invalid
+            console.log(`API response JSON parsed successfully on attempt #${attempt}`);
+            
+            // Reset error count on successful API response
+            resetErrorCount();
+            
+            // Check for stopping conditions
+            if (data.Paging && data.Paging.RecordsPerPage === 0) {
+                console.log("API returned Paging.RecordsPerPage=0. No more records available.");
+                if (page && !page.isClosed()) await page.close();
+                return { ...data, shouldStop: true };
+            }
+            
+            if (data.ErrorCode && data.ErrorCode.Id === 400) {
+                console.log("API returned ErrorCode.Id=400. Stopping due to error.");
+                if (page && !page.isClosed()) await page.close();
+                return { ...data, shouldStop: true };
+            }
+            
+            // Close the page to free memory
+            if (page && !page.isClosed()) await page.close();
+            
+            return data;
+
+        } catch (error) {
+            lastError = error; 
+            console.error(`Attempt #${attempt} failed: ${error.message}`);
+            if (error.name === 'TimeoutError') {
+                console.error(error.stack);
+            }
+            
+            if (attempt > CONFIG.MAX_RETRY_ATTEMPTS) {
+                console.error("Max retry attempts reached for scraping. Failing operation.");
+                if (page && !page.isClosed()) await page.close();
+                throw lastError; 
+            }
+            
+            console.log(`Preparing for next attempt after ${CONFIG.RETRY_DELAY_MS / 1000} seconds delay...`);
+            await new Promise(resolve => setTimeout(resolve, CONFIG.RETRY_DELAY_MS));
         }
-
-       const data = await response.json(); // Throws if JSON is invalid
-       console.log("API response JSON parsed.");
-       
-       // Reset error count on successful API response
-       resetErrorCount();
-       
-       // Check for stopping conditions
-       if (data.Paging && data.Paging.RecordsPerPage === 0) {
-           console.log("API returned Paging.RecordsPerPage=0. No more records available.");
-           await page.close();
-           return { ...data, shouldStop: true };
-       }
-       
-       if (data.ErrorCode && data.ErrorCode.Id === 400) {
-           console.log("API returned ErrorCode.Id=400. Stopping due to error.");
-           await page.close();
-           return { ...data, shouldStop: true };
-       }
-       
-       // Close the page to free memory
-       await page.close();
-       
-       return data;
+    }
+    
+    if (page && !page.isClosed()) await page.close();
+    throw lastError || new Error("Scraping failed after all attempts; unknown state.");
 }
 
 // 4. Data Saving Function
@@ -883,143 +922,8 @@ async function scrapePropertyDetail(browser, relativeUrl) {
     }
 }
 
-async function runDetailScraper() {
-    console.log("Starting detail scraper...");
-    
-    // Read the listings file
-    let listingsData;
-    try {
-        const content = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
-        listingsData = JSON.parse(content);
-    } catch (error) {
-        console.error(`Error reading listings file: ${error.message}`);
-        return [];
-    }
-    
-    if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
-        console.error("No results found in listings file");
-        return [];
-    }
-    
-    // Filter items with RelativeDetailsURL
-    const itemsWithDetails = listingsData.Results.filter(item => item.RelativeDetailsURL);
-    console.log(`Found ${itemsWithDetails.length} listings with detail URLs`);
-    
-    if (itemsWithDetails.length === 0) {
-        console.log("No listings with detail URLs found");
-        return [];
-    }
-    
-    // Process all items (no filtering based on previous progress)
-    const itemsToProcess = itemsWithDetails;
-    
-    console.log(`Found ${itemsToProcess.length} items to process for details`);
-    
-    // Launch browser
-    console.log(`Launching browser for detail scraping (Headless: ${CONFIG.HEADLESS})...`);
-    const browser = await puppeteer.launch({
-        headless: CONFIG.HEADLESS,
-        executablePath: CONFIG.EXECUTABLE_PATH,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        ignoreHTTPSErrors: true,
-    });
-    
-    // Track detailed properties for batch merging
-    let detailedProperties = [];
-    
-    let processed = detailProgress.processedPropertyIds.length;
-    
-    try {
-        for (let i = 0; i < itemsToProcess.length; i++) {
-            const item = itemsToProcess[i];
-            const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
-            
-            processed++;
-            console.log(`Processing ${processed}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
-            
-            let result;
-            try {
-                result = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
-            } catch (error) {
-                // Check if it's an HTTP error
-                if (error.message.includes('HTTP 4') || error.message.includes('HTTP 5')) {
-                    console.warn(`HTTP error for property ${propertyId}: ${error.message}`);
-                    await handleServerError('Detail page HTTP error', error.message);
-                    i--; // Retry the same property
-                    processed--; // Don't increment processed count
-                    continue;
-                }
-                // Re-throw non-HTTP errors
-                throw error;
-            }
-            
-            if (result && result.details) {
-                const { page, details } = result;
-                
-                // Download and save images with proper headers to avoid detection
-                console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
-                
-                // Check for no images condition
-                if (details.extractedDetails.images.length === 0) {
-                    console.warn(`No images found for property ${details.Id}`);
-                    await page.close();
-                    await handleServerError('No images', `Property ${details.Id} has no images`);
-                    i--; // Retry the same property
-                    processed--; // Don't increment processed count
-                    continue;
-                }
-                
-                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT, item.PhotoChangeDateUTC);
-                
-                // Check if image downloading failed (no images saved despite having image URLs)
-                if (savedImages.length === 0 && details.extractedDetails.images.length > 0) {
-                    console.warn(`Failed to download any images for property ${details.Id}`);
-                    await page.close();
-                    await handleServerError('Image download failed', `Property ${details.Id} image downloads failed`);
-                    i--; // Retry the same property
-                    processed--; // Don't increment processed count
-                    continue;
-                }
-                         // Reset error count on successful processing
-                resetErrorCount();
-                
-                // Update the details with saved image information
-                details.extractedDetails.images = savedImages;
-                details.extractedDetails.imagesSaved = savedImages.length;
-                details.extractedDetails.imagesDirectory = `./data/properties/${details.Id}/images/`;
-                
-                // Close the page after processing
-                await page.close();
-                
-                // Save the extracted real estate information
-                detailedProperties.push(details);
-                
-                console.log(`Property processed: ${i + 1}/${itemsToProcess.length} (${details.extractedDetails.imagesSaved} images saved)`);
-            }
-            
-            // Add delay between requests
-            const sleepMs = CONFIG.getSleepBetweenPages();
-            console.log(`Waiting ${sleepMs / 1000} seconds before next detail page...`);
-            await new Promise(resolve => setTimeout(resolve, sleepMs));
-        }
-        
-        console.log(`Detail scraping completed. Processed ${itemsToProcess.length} properties.`);
-        
-        // Return detailed properties for merging
-        return detailedProperties;
-        
-    } catch (error) {
-        console.error(`Detail scraping error: ${error.message}`);
-        return detailedProperties; // Return what we have so far
-    } finally {
-        await browser.close();
-    }
-    
-    return detailedProperties;
-}
-
 // Helper function to run detail scraping for a single page of listings
-async function runDetailScrapingForPage(pageResults) {
+async function runDetailScrapingForPage(pageResults, browser, pageData) {
     if (!pageResults || !Array.isArray(pageResults) || pageResults.length === 0) {
         console.log("No listings to process for detail scraping");
         return;
@@ -1034,32 +938,18 @@ async function runDetailScrapingForPage(pageResults) {
         return;
     }
     
-    // Process all items with detail URLs (no filtering based on previous progress)
-    const itemsToProcess = itemsWithDetails;
-    
-    console.log(`Found ${itemsToProcess.length} items to process for details in current page`);
-    
-    // Launch browser for detail scraping
-    console.log(`Launching browser for detail scraping (Headless: ${CONFIG.HEADLESS})...`);
-    const detailBrowser = await puppeteer.launch({
-        headless: CONFIG.HEADLESS,
-        executablePath: CONFIG.EXECUTABLE_PATH,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        ignoreHTTPSErrors: true,
-    });
-    
-    let detailedProperties = [];
+    console.log(`Processing ${itemsWithDetails.length} items for details in current page using shared browser instance`);
     
     try {
-        for (let i = 0; i < itemsToProcess.length; i++) {
-            const item = itemsToProcess[i];
+        for (let i = 0; i < itemsWithDetails.length; i++) {
+            const item = itemsWithDetails[i];
             const propertyId = item.RelativeDetailsURL?.match(/\/(\d+)\//)?.[1];
             
-            console.log(`Processing detail ${i + 1}/${itemsToProcess.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
+            console.log(`Processing detail ${i + 1}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
             
             let result;
             try {
-                result = await scrapePropertyDetail(detailBrowser, item.RelativeDetailsURL);
+                result = await scrapePropertyDetail(browser, item.RelativeDetailsURL);
             } catch (error) {
                 // Check if it's an HTTP error
                 if (error.message.includes('HTTP 4') || error.message.includes('HTTP 5')) {
@@ -1109,10 +999,26 @@ async function runDetailScrapingForPage(pageResults) {
                 // Close the page after processing
                 await page.close();
                 
-                // Save the extracted real estate information
-                detailedProperties.push(details);
+                // DIRECTLY ADD extractedDetails to the original listing item
+                item.extractedDetails = details.extractedDetails;
                 
-                console.log(`Detail processed: ${detailedProperties.length}/${itemsToProcess.length} (${details.extractedDetails.imagesSaved} images saved)`);
+                // Add other detail properties with X_ prefix if they don't exist in listing
+                Object.keys(details).forEach(key => {
+                    if (key !== 'Id' && key !== 'extractedDetails') {
+                        const prefixedKey = `X_${key}`;
+                        if (!item.hasOwnProperty(key)) {
+                            item[prefixedKey] = details[key];
+                        }
+                        // If key exists, we ignore it to avoid overwriting original listing data
+                    }
+                });
+                
+                console.log(`Detail processed and added directly to listing item: ${i + 1}/${itemsWithDetails.length} (${details.extractedDetails.imagesSaved} images saved)`);
+                
+                // SAVE DATA AFTER EACH PROPERTY DETAIL IS SUCCESSFULLY PROCESSED
+                console.log(`Saving data after processing property ${propertyId} details...`);
+                await saveData(pageData, CONFIG.OUTPUT_FILE);
+                console.log(`Data saved after property ${propertyId} detail processing`);
             }
             
             // Add delay between requests
@@ -1121,72 +1027,11 @@ async function runDetailScrapingForPage(pageResults) {
             await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
         
-        // Merge detail data into listings immediately
-        if (detailedProperties.length > 0) {
-            await mergeDetailIntoListings(detailedProperties, CONFIG.OUTPUT_FILE);
-            console.log(`Merged ${detailedProperties.length} detailed properties into listings file`);
-        }
+        console.log(`Details processed and saved for all ${itemsWithDetails.length} listing items in current page`);
         
     } catch (error) {
         console.error(`Detail scraping error for page: ${error.message}`);
-    } finally {
-        await detailBrowser.close();
-    }
-}
-
-// Helper function to merge detail data into listings
-async function mergeDetailIntoListings(detailData, outputFile) {
-    try {
-        // Read existing listings
-        const existingContent = await fs.readFile(outputFile, 'utf8');
-        const listingsData = JSON.parse(existingContent);
-        
-        if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
-            console.warn('No existing listings found to merge details into');
-            return;
-        }
-        
-        // Create a map of listings by ID for efficient lookup
-        const listingsMap = new Map();
-        listingsData.Results.forEach(listing => {
-            if (listing.Id) {
-                listingsMap.set(listing.Id, listing);
-            }
-        });
-        
-        // Merge detail data into listings
-        detailData.forEach(detail => {
-            if (detail.Id && listingsMap.has(detail.Id)) {
-                const listing = listingsMap.get(detail.Id);
-                
-                // Add extractedDetails directly
-                if (detail.extractedDetails) {
-                    listing.extractedDetails = detail.extractedDetails;
-                }
-                
-                // Add other detail properties with X_ prefix if they don't exist in listing
-                Object.keys(detail).forEach(key => {
-                    if (key !== 'Id' && key !== 'extractedDetails') {
-                        const prefixedKey = `X_${key}`;
-                        if (!listing.hasOwnProperty(key)) {
-                            listing[prefixedKey] = detail[key];
-                        }
-                        // If key exists, we ignore it to avoid overwriting original listing data
-                    }
-                });
-                
-                console.log(`Detail data merged for property ${detail.Id}`);
-            } else {
-                console.warn(`Property ${detail.Id} not found in listings, skipping detail merge`);
-            }
-        });
-        
-        // Save updated listings
-        await fs.writeFile(outputFile, JSON.stringify(listingsData, null, 2), 'utf8');
-        console.log(`Detail data merged into ${detailData.length} listings and saved to ${outputFile}`);
-        
-    } catch (error) {
-        console.error(`Failed to merge detail data: ${error.message}`);
+        // Don't close browser here since it's shared - let the main function handle it
     }
 }
 
@@ -1195,21 +1040,18 @@ async function main() {
      console.log("Script start - Integrated listings and details scraping (per-page detail processing).");
      
      let browser;
-     let detailedProperties = [];
      
-     // PHASE 1: Listings scraping (unless skipped)
-     if (!skipListings) {
-         console.log("\n=== PHASE 1: LISTINGS SCRAPING ===");
-         
-         // Load scraper state if resuming
-         const savedState = await loadScraperState();
-         currentTransactionIndex = savedState.currentTransactionIndex;
-         currentGeoIndex = savedState.currentGeoIndex;
-         currentPage = savedState.currentPage;
-         
-         // Create backup of existing file before starting
-         const backupFileName = CONFIG.getBackupFileName();
-         await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
+     console.log("\n=== INTEGRATED LISTINGS AND DETAILS SCRAPING ===");
+     
+     // Load scraper state if resuming
+     const savedState = await loadScraperState();
+     currentTransactionIndex = savedState.currentTransactionIndex;
+     currentGeoIndex = savedState.currentGeoIndex;
+     currentPage = savedState.currentPage;
+     
+     // Create backup of existing file before starting
+     const backupFileName = CONFIG.getBackupFileName();
+     await createBackup(CONFIG.OUTPUT_FILE, backupFileName);
      
      try {
         console.log(`Launching browser (Headless: ${CONFIG.HEADLESS})...`);
@@ -1268,7 +1110,7 @@ async function main() {
                 // Save data even if we're stopping (might have some results)
                 if (data.Results && data.Results.length > 0) {
                     // Run detail scraping for this page's listings before saving data
-                    await runDetailScrapingForPage(data.Results);
+                    await runDetailScrapingForPage(data.Results, browser, data);
                     // Remove the shouldStop flag before saving
                     const { shouldStop, ...dataToSave } = data;
                     await saveData(dataToSave, CONFIG.OUTPUT_FILE);
@@ -1279,7 +1121,7 @@ async function main() {
             }
             
             // Run detail scraping for the current page's listings before saving data
-            await runDetailScrapingForPage(data.Results);
+            await runDetailScrapingForPage(data.Results, browser, data);
             
             await saveData(data, CONFIG.OUTPUT_FILE);
             
@@ -1313,7 +1155,7 @@ async function main() {
                 // Save data even if we're stopping (might have some results)
                 if (data.Results && data.Results.length > 0) {
                     // Run detail scraping for this page's listings before saving data
-                    await runDetailScrapingForPage(data.Results);
+                    await runDetailScrapingForPage(data.Results, browser, data);
                     // Remove the shouldStop flag before saving
                     const { shouldStop, ...dataToSave } = data;
                     await saveData(dataToSave, CONFIG.OUTPUT_FILE);
@@ -1323,11 +1165,12 @@ async function main() {
                 break;
             }
             
-            // Run detail scraping for the current page's listings before saving data
-            await runDetailScrapingForPage(data.Results);
+            // Run detail scraping for the current page's listings (data saved per property inside)
+            await runDetailScrapingForPage(data.Results, browser, data);
             
+            // Final save after all details are processed (this is now redundant but kept for safety)
             await saveData(data, CONFIG.OUTPUT_FILE);
-            
+
             // Save scraper state after successful scrape
             await saveScraperState();
             
@@ -1337,54 +1180,34 @@ async function main() {
             if (typeof CONFIG.MAP_URL !== 'function') {
                 break;
             }
-            
+
             // Add a randomized delay between pages to be respectful to the server
             const sleepMs = CONFIG.getSleepBetweenPages();
             console.log(`Waiting ${sleepMs / 1000} seconds before next page...`);
             await new Promise(resolve => setTimeout(resolve, sleepMs));
         }
-        
-         // Reset state file on successful completion for next cycle
-         if (CONFIG.RESUME) {
-             await resetScraperState();
-         }
-         
-         console.log("Listings scraping completed successfully.");
 
-     } catch (error) {
-         console.error("Listings scraping error:", error.message || error);
-     } finally {
-         if (browser) {
-             console.log("Closing listings browser.");
-             await browser.close();
-         }
-     }
-     } else {
-         console.log("Skipping listings scraping (--skip-listings flag provided)");
-     }
-     
-     // If --skip-listings was used, run detail scraping for any remaining unprocessed listings
-     if (skipListings) {
-         console.log("\n=== PROCESSING REMAINING DETAILS (--skip-listings mode) ===");
-         try {
-             detailedProperties = await runDetailScraper();
-             console.log(`Detail scraping completed. Extracted details for ${detailedProperties.length} properties.`);
-             
-             // Merge detail data into listings
-             if (detailedProperties.length > 0) {
-                 await mergeDetailIntoListings(detailedProperties, CONFIG.OUTPUT_FILE);
-             }
-             
-         } catch (error) {
-             console.error("Detail scraping error:", error.message || error);
-         }
-     } else {
-         console.log("\n=== DETAIL SCRAPING COMPLETED PER PAGE ===");
-         console.log("Details were scraped and merged immediately after each page of listings.");
-     }
-     
-     console.log("\n=== SCRIPT COMPLETED ===");
-     console.log("Listings and details have been processed and saved together per page.");
+        // Reset state file on successful completion for next cycle
+        if (CONFIG.RESUME) {
+            await resetScraperState();
+        }
+        
+        console.log("Listings scraping completed successfully.");
+
+    } catch (error) {
+        console.error("Listings scraping error:", error.message || error);
+    } finally {
+        if (browser) {
+            console.log("Closing listings browser.");
+            await browser.close();
+        }
+    }
+    
+    console.log("\n=== INTEGRATED SCRAPING COMPLETED ===");
+    console.log("Listings and details have been processed and saved together per page.");
+    
+    console.log("\n=== SCRIPT COMPLETED ===");
+    console.log("Listings and details have been processed and saved together per page.");
 }
 
 // Execute
