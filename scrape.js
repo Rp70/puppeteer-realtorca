@@ -968,24 +968,14 @@ async function runDetailScrapingForPage(pageResults, browser, pageData) {
                 // Download and save images with proper headers to avoid detection
                 console.log(`Found ${details.extractedDetails.images.length} images for property ${details.Id}`);
                 
-                // Check for no images condition
-                if (details.extractedDetails.images.length === 0) {
-                    console.warn(`No images found for property ${details.Id}`);
-                    await page.close();
-                    await handleServerError('No images', `Property ${details.Id} has no images`);
-                    i--; // Retry the same property
-                    continue;
-                }
+                let savedImages = [];
                 
-                const savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT, item.PhotoChangeDateUTC);
-                
-                // Check if image downloading failed (no images saved despite having image URLs)
-                if (savedImages.length === 0 && details.extractedDetails.images.length > 0) {
-                    console.warn(`Failed to download any images for property ${details.Id}`);
-                    await page.close();
-                    await handleServerError('Image download failed', `Property ${details.Id} image downloads failed`);
-                    i--; // Retry the same property
-                    continue;
+                // Only attempt to save images if there are images available
+                if (details.extractedDetails.images.length > 0) {
+                    savedImages = await savePropertyImages(details.Id, details.extractedDetails.images, CONFIG.USER_AGENT, item.PhotoChangeDateUTC);
+                    console.log(`Successfully processed ${savedImages.length} out of ${details.extractedDetails.images.length} images for property ${details.Id}`);
+                } else {
+                    console.log(`Property ${details.Id} has no images - this is normal for some properties`);
                 }
                 
                 // Reset error count on successful processing
@@ -994,7 +984,7 @@ async function runDetailScrapingForPage(pageResults, browser, pageData) {
                 // Update the details with saved image information
                 details.extractedDetails.images = savedImages;
                 details.extractedDetails.imagesSaved = savedImages.length;
-                details.extractedDetails.imagesDirectory = `./data/properties/${details.Id}/images/`;
+                details.extractedDetails.imagesDirectory = savedImages.length > 0 ? `./data/properties/${details.Id}/images/` : null;
                 
                 // Close the page after processing
                 await page.close();
