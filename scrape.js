@@ -103,6 +103,7 @@ const CONFIG = {
     OUTPUT_FILE: './data/realtor_listings_perfect.json',
     DETAIL_FILE: './tmp/detail.html',
     BACKUP_DIR: './data/backups',
+    PROPERTIES_DIR: './data/properties',
     getBackupFileName: () => {
         const now = new Date();
         const yyyy = now.getFullYear();
@@ -129,7 +130,7 @@ const CONFIG = {
         const maxMs = 3333000;
         return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
     },
-    HEADLESS: false, // true = faster, no UI. false = slower, visual, better for debug/evasion.
+    HEADLESS: true, // true = faster, no UI. false = slower, visual, better for debug/evasion.
     // EXECUTABLE_PATH: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', // <<-- THIS IS NOW UNCOMMENTED
     EXECUTABLE_PATH: '/usr/bin/google-chrome-stable', // Standard path if installed via apt in Docker
     BLOCKED_RESOURCE_TYPES: ['image', 'media', 'font', 'stylesheet', 'other'], // Efficiency: block non essential
@@ -223,6 +224,15 @@ function resetErrorCount() {
 
 function isServerError(statusCode) {
     return statusCode >= 400 && statusCode <= 599;
+}
+
+// Helper functions for property paths
+function getPropertyDirectory(propertyId) {
+    return path.join(CONFIG.PROPERTIES_DIR, propertyId);
+}
+
+function getPropertyImagesDirectory(propertyId) {
+    return path.join(CONFIG.PROPERTIES_DIR, propertyId, 'images');
 }
 
 // 3. Core Logic Function with Retry Pattern
@@ -548,23 +558,56 @@ function updateCachedListingsData(newData) {
     }
 }
 
-// Fast image update check using cached data
-function shouldUpdateImagesFromCache(propertyId, newPhotoChangeDateUTC) {
+// Consolidated function to check if property details should be scraped
+async function shouldScrapePropertyDetails(propertyId, newPhotoChangeDateUTC) {
+    if (!propertyId) {
+        console.log(`No propertyId provided, skipping detail scraping`);
+        return false;
+    }
+
+    // Check 1: Does the images folder exist?
+    const imagesDir = getPropertyImagesDirectory(propertyId);
+    try {
+        await fs.access(imagesDir);
+        console.log(`Images directory exists for property ${propertyId}: ${imagesDir}`);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.log(`Images directory does not exist for property ${propertyId}, will scrape details`);
+            return true;
+        } else {
+            console.warn(`Error checking images directory for property ${propertyId}: ${error.message}, will scrape details`);
+            return true;
+        }
+    }
+
+    // Check 2: PhotoChangeDateUTC comparison
     if (!newPhotoChangeDateUTC) {
-        console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, skipping detail scraping`);
+        console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, but images exist, skipping detail scraping`);
         return false;
     }
     
-    if (!cachedListingsData || !cachedListingsData.Results || !Array.isArray(cachedListingsData.Results)) {
-        console.log(`No cached listings data, will scrape details for property ${propertyId}`);
+    // Use cached data if available, otherwise load from file
+    let listingsData = cachedListingsData;
+    if (!listingsData) {
+        try {
+            const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
+            listingsData = JSON.parse(existingContent);
+        } catch (error) {
+            console.log(`No existing listings found, will scrape details for property ${propertyId}`);
+            return true;
+        }
+    }
+    
+    if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
+        console.log(`No existing listings found, will scrape details for property ${propertyId}`);
         return true;
     }
     
-    // Find the existing listing for this property in cache
-    const existingListing = cachedListingsData.Results.find(item => item.Id === propertyId);
+    // Find the existing listing for this property
+    const existingListing = listingsData.Results.find(item => item.Id === propertyId);
     
     if (!existingListing) {
-        console.log(`Property ${propertyId} not found in cached listings, will scrape details`);
+        console.log(`Property ${propertyId} not found in existing listings, will scrape details`);
         return true;
     }
     
@@ -588,61 +631,9 @@ function shouldUpdateImagesFromCache(propertyId, newPhotoChangeDateUTC) {
     }
 }
 
-// Helper function to check if images need to be updated based on PhotoChangeDateUTC (uses cached data)
-async function shouldUpdateImages(propertyId, newPhotoChangeDateUTC) {
-    if (!newPhotoChangeDateUTC) {
-        console.log(`No PhotoChangeDateUTC provided for property ${propertyId}, skipping image download`);
-        return false;
-    }
-    
-    // Use cached data if available, otherwise load from file
-    let listingsData = cachedListingsData;
-    if (!listingsData) {
-        try {
-            const existingContent = await fs.readFile(CONFIG.OUTPUT_FILE, 'utf8');
-            listingsData = JSON.parse(existingContent);
-        } catch (error) {
-            console.log(`No existing listings found, will download images for property ${propertyId}`);
-            return true;
-        }
-    }
-    
-    if (!listingsData.Results || !Array.isArray(listingsData.Results)) {
-        console.log(`No existing listings found, will download images for property ${propertyId}`);
-        return true;
-    }
-    
-    // Find the existing listing for this property
-    const existingListing = listingsData.Results.find(item => item.Id === propertyId);
-    
-    if (!existingListing) {
-        console.log(`Property ${propertyId} not found in existing listings, will download images`);
-        return true;
-    }
-    
-    const existingPhotoChangeDateUTC = existingListing.PhotoChangeDateUTC;
-    
-    if (!existingPhotoChangeDateUTC) {
-        console.log(`No existing PhotoChangeDateUTC for property ${propertyId}, will download images`);
-        return true;
-    }
-    
-    // Parse dates and compare
-    const existingDate = new Date(existingPhotoChangeDateUTC);
-    const newDate = new Date(newPhotoChangeDateUTC);
-    
-    if (newDate > existingDate) {
-        console.log(`PhotoChangeDateUTC is newer for property ${propertyId} (${newPhotoChangeDateUTC} > ${existingPhotoChangeDateUTC}), will update images`);
-        return true;
-    } else {
-        console.log(`PhotoChangeDateUTC is same or older for property ${propertyId} (${newPhotoChangeDateUTC} <= ${existingPhotoChangeDateUTC}), skipping image download`);
-        return false;
-    }
-}
-
 // Helper function to delete existing images for a property
 async function deleteExistingImages(propertyId) {
-    const imagesDir = `./data/properties/${propertyId}/images`;
+    const imagesDir = getPropertyImagesDirectory(propertyId);
     
     try {
         // Check if images directory exists
@@ -674,12 +665,12 @@ async function savePropertyImages(propertyId, images, userAgent, photoChangeDate
         return [];
     }
     
-    // Check if we need to update images based on PhotoChangeDateUTC
-    const needsUpdate = await shouldUpdateImages(propertyId, photoChangeDateUTC);
+    // Check if we need to update images based on PhotoChangeDateUTC and folder existence
+    const needsUpdate = await shouldScrapePropertyDetails(propertyId, photoChangeDateUTC);
     
     if (!needsUpdate) {
         // Return existing images info if they exist
-        const imagesDir = `./data/properties/${propertyId}/images`;
+        const imagesDir = getPropertyImagesDirectory(propertyId);
         try {
             const files = await fs.readdir(imagesDir);
             const existingImages = files.map((filename, index) => ({
@@ -697,8 +688,8 @@ async function savePropertyImages(propertyId, images, userAgent, photoChangeDate
         }
     }
     
-    const propertyDir = `./data/properties/${propertyId}`;
-    const imagesDir = `${propertyDir}/images`;
+    const propertyDir = getPropertyDirectory(propertyId);
+    const imagesDir = getPropertyImagesDirectory(propertyId);
     
     // Delete existing images if we're updating
     if (needsUpdate) {
@@ -1052,8 +1043,8 @@ async function runDetailScrapingForPage(pageResults, browser, pageData) {
             
             console.log(`Checking detail ${i + 1}/${itemsWithDetails.length}: ${item.RelativeDetailsURL} (Property ID: ${propertyId})`);
             
-            // Fast check: Should we scrape details based on PhotoChangeDateUTC?
-            const shouldScrapeDetails = shouldUpdateImagesFromCache(propertyId, item.PhotoChangeDateUTC);
+            // Fast check: Should we scrape details based on folder existence and PhotoChangeDateUTC?
+            const shouldScrapeDetails = await shouldScrapePropertyDetails(propertyId, item.PhotoChangeDateUTC);
             
             if (!shouldScrapeDetails) {
                 console.log(`Skipping detail scraping for property ${propertyId} - no updates needed`);
