@@ -1,0 +1,323 @@
+{
+  "propertyId": "28891086",
+  "mlsNumber": "R3050282",
+  "price": "$5,195,000",
+  "address": "4659 WOODGREEN DRIVEWest Vancouver, British Columbia V7S2V4",
+  "city": "West Vancouver",
+  "province": "British Columbia",
+  "postalCode": null,
+  "propertyType": "Single Family",
+  "buildingType": "House",
+  "bedrooms": "5",
+  "bathrooms": "7",
+  "sqft": "5987 sqft",
+  "lotSize": "18296 sqft",
+  "yearBuilt": null,
+  "neighbourhood": "Cypress Park Estates",
+  "parkingType": "Garage (3)",
+  "buildingAmenities": "Guest Suite",
+  "buildingStyle": "Detached",
+  "description": "Breathtaking custom-built VIEW home curated by Marque Thompson and built by Linda Burger on a vast 18,296 square ft property in Cypress Park Estates. Experience indoor/outdoor living complete with exceptional interior vaulted spaces, chef's kitchen, marble baths, gleaming oak floors, serene private gardens, and a picturesque swimming pool. This 5 bedroom, 7 bathroom home also hosts a private complete suite for nannies, guests to enjoy. Built and designed with a discerning eye, using only the finest materials - step into a home that exudes quality. These ones are hard to find - a truly special place. (31941368)",
+  "propertyDetails": {
+    "Property_Type": "Single Family",
+    "Building_Type": "House",
+    "Square_Footage": "5987 sqft",
+    "Title": "Freehold",
+    "Land_Size": "18296 sqft",
+    "Built_in": "2009",
+    "Annual_Property_Taxes": "$15,067.10 (CAD)",
+    "Parking_Type": "Garage (3)",
+    "Time_on_REALTOR.ca": "8 days",
+    "Total": "7",
+    "Appliances_Included": "All",
+    "Basement_Features": "Unknown",
+    "Basement_Type": "Unknown (Finished)",
+    "Style": "Detached",
+    "Architecture_Style": "2 Level",
+    "Fire_Protection": "Security system",
+    "Building_Amenities": "Guest Suite",
+    "Fireplace": "3",
+    "Heating_Type": "Radiant heat",
+    "Pool_Type": "Outdoor pool",
+    "Total_Parking_Spaces": "5",
+    "Frontage": "131 ft"
+  },
+  "features": [],
+  "images": [
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143330000/reb89/highres/2/R3050282_1.jpg",
+      "type": "hero",
+      "localPath": "data/properties/28891086/images/hero.jpg",
+      "filename": "hero.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142970000/reb89/highres/2/R3050282_2.jpg",
+      "type": "grid",
+      "index": 0,
+      "localPath": "data/properties/28891086/images/grid_01.jpg",
+      "filename": "grid_01.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155870000/reb89/highres/2/R3050282_3.jpg",
+      "type": "grid",
+      "index": 1,
+      "localPath": "data/properties/28891086/images/grid_01.jpg",
+      "filename": "grid_01.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155000000/reb89/highres/2/R3050282_4.jpg",
+      "type": "grid",
+      "index": 2,
+      "localPath": "data/properties/28891086/images/grid_02.jpg",
+      "filename": "grid_02.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142970000/reb89/highres/2/R3050282_5.jpg",
+      "type": "grid",
+      "index": 3,
+      "localPath": "data/properties/28891086/images/grid_03.jpg",
+      "filename": "grid_03.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143000000/reb89/highres/2/R3050282_6.jpg",
+      "type": "gallery",
+      "index": 5,
+      "localPath": "data/properties/28891086/images/gallery_05.jpg",
+      "filename": "gallery_05.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143470000/reb89/highres/2/R3050282_7.jpg",
+      "type": "gallery",
+      "index": 6,
+      "localPath": "data/properties/28891086/images/gallery_06.jpg",
+      "filename": "gallery_06.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143300000/reb89/highres/2/R3050282_8.jpg",
+      "type": "gallery",
+      "index": 7,
+      "localPath": "data/properties/28891086/images/gallery_07.jpg",
+      "filename": "gallery_07.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143000000/reb89/highres/2/R3050282_9.jpg",
+      "type": "gallery",
+      "index": 8,
+      "localPath": "data/properties/28891086/images/gallery_08.jpg",
+      "filename": "gallery_08.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142970000/reb89/highres/2/R3050282_10.jpg",
+      "type": "gallery",
+      "index": 9,
+      "localPath": "data/properties/28891086/images/gallery_09.jpg",
+      "filename": "gallery_09.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143000000/reb89/highres/2/R3050282_11.jpg",
+      "type": "gallery",
+      "index": 10,
+      "localPath": "data/properties/28891086/images/gallery_10.jpg",
+      "filename": "gallery_10.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142970000/reb89/highres/2/R3050282_12.jpg",
+      "type": "gallery",
+      "index": 11,
+      "localPath": "data/properties/28891086/images/gallery_11.jpg",
+      "filename": "gallery_11.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211147900000/reb89/highres/2/R3050282_13.jpg",
+      "type": "gallery",
+      "index": 12,
+      "localPath": "data/properties/28891086/images/gallery_12.jpg",
+      "filename": "gallery_12.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143300000/reb89/highres/2/R3050282_14.jpg",
+      "type": "gallery",
+      "index": 13,
+      "localPath": "data/properties/28891086/images/gallery_13.jpg",
+      "filename": "gallery_13.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155900000/reb89/highres/2/R3050282_15.jpg",
+      "type": "gallery",
+      "index": 14,
+      "localPath": "data/properties/28891086/images/gallery_14.jpg",
+      "filename": "gallery_14.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211148270000/reb89/highres/2/R3050282_16.jpg",
+      "type": "gallery",
+      "index": 15,
+      "localPath": "data/properties/28891086/images/gallery_15.jpg",
+      "filename": "gallery_15.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143000000/reb89/highres/2/R3050282_17.jpg",
+      "type": "gallery",
+      "index": 16,
+      "localPath": "data/properties/28891086/images/gallery_16.jpg",
+      "filename": "gallery_16.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211148270000/reb89/highres/2/R3050282_18.jpg",
+      "type": "gallery",
+      "index": 17,
+      "localPath": "data/properties/28891086/images/gallery_17.jpg",
+      "filename": "gallery_17.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155930000/reb89/highres/2/R3050282_19.jpg",
+      "type": "gallery",
+      "index": 18,
+      "localPath": "data/properties/28891086/images/gallery_18.jpg",
+      "filename": "gallery_18.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211143000000/reb89/highres/2/R3050282_20.jpg",
+      "type": "gallery",
+      "index": 19,
+      "localPath": "data/properties/28891086/images/gallery_19.jpg",
+      "filename": "gallery_19.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142630000/reb89/highres/2/R3050282_21.jpg",
+      "type": "gallery",
+      "index": 20,
+      "localPath": "data/properties/28891086/images/gallery_20.jpg",
+      "filename": "gallery_20.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211154800000/reb89/highres/2/R3050282_22.jpg",
+      "type": "gallery",
+      "index": 21,
+      "localPath": "data/properties/28891086/images/gallery_21.jpg",
+      "filename": "gallery_21.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142370000/reb89/highres/2/R3050282_23.jpg",
+      "type": "gallery",
+      "index": 22,
+      "localPath": "data/properties/28891086/images/gallery_22.jpg",
+      "filename": "gallery_22.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211145570000/reb89/highres/2/R3050282_24.jpg",
+      "type": "gallery",
+      "index": 23,
+      "localPath": "data/properties/28891086/images/gallery_23.jpg",
+      "filename": "gallery_23.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155830000/reb89/highres/2/R3050282_25.jpg",
+      "type": "gallery",
+      "index": 24,
+      "localPath": "data/properties/28891086/images/gallery_24.jpg",
+      "filename": "gallery_24.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211160300000/reb89/highres/2/R3050282_26.jpg",
+      "type": "gallery",
+      "index": 25,
+      "localPath": "data/properties/28891086/images/gallery_25.jpg",
+      "filename": "gallery_25.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142970000/reb89/highres/2/R3050282_27.jpg",
+      "type": "gallery",
+      "index": 26,
+      "localPath": "data/properties/28891086/images/gallery_26.jpg",
+      "filename": "gallery_26.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211154770000/reb89/highres/2/R3050282_28.jpg",
+      "type": "gallery",
+      "index": 27,
+      "localPath": "data/properties/28891086/images/gallery_27.jpg",
+      "filename": "gallery_27.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211145330000/reb89/highres/2/R3050282_29.jpg",
+      "type": "gallery",
+      "index": 28,
+      "localPath": "data/properties/28891086/images/gallery_28.jpg",
+      "filename": "gallery_28.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211147970000/reb89/highres/2/R3050282_30.jpg",
+      "type": "gallery",
+      "index": 29,
+      "localPath": "data/properties/28891086/images/gallery_29.jpg",
+      "filename": "gallery_29.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142400000/reb89/highres/2/R3050282_31.jpg",
+      "type": "gallery",
+      "index": 30,
+      "localPath": "data/properties/28891086/images/gallery_30.jpg",
+      "filename": "gallery_30.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211142270000/reb89/highres/2/R3050282_32.jpg",
+      "type": "gallery",
+      "index": 31,
+      "localPath": "data/properties/28891086/images/gallery_31.jpg",
+      "filename": "gallery_31.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155870000/reb89/highres/2/R3050282_33.jpg",
+      "type": "gallery",
+      "index": 32,
+      "localPath": "data/properties/28891086/images/gallery_32.jpg",
+      "filename": "gallery_32.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211149770000/reb89/highres/2/R3050282_34.jpg",
+      "type": "gallery",
+      "index": 33,
+      "localPath": "data/properties/28891086/images/gallery_33.jpg",
+      "filename": "gallery_33.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211161170000/reb89/highres/2/R3050282_35.jpg",
+      "type": "gallery",
+      "index": 34,
+      "localPath": "data/properties/28891086/images/gallery_34.jpg",
+      "filename": "gallery_34.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211148200000/reb89/highres/2/R3050282_36.jpg",
+      "type": "gallery",
+      "index": 35,
+      "localPath": "data/properties/28891086/images/gallery_35.jpg",
+      "filename": "gallery_35.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211161100000/reb89/highres/2/R3050282_37.jpg",
+      "type": "gallery",
+      "index": 36,
+      "localPath": "data/properties/28891086/images/gallery_36.jpg",
+      "filename": "gallery_36.jpg"
+    },
+    {
+      "url": "https://cdn.realtor.ca/listing/TS638943211155300000/reb89/highres/2/R3050282_38.jpg",
+      "type": "gallery",
+      "index": 37,
+      "localPath": "data/properties/28891086/images/gallery_37.jpg",
+      "filename": "gallery_37.jpg"
+    }
+  ],
+  "agent": {
+    "name": "Eric Latta",
+    "phone": "604-351-5211",
+    "email": null,
+    "company": null
+  },
+  "scrapedAt": "2025-09-28T08:27:43.138Z",
+  "sourceUrl": "https://www.realtor.ca/real-estate/28891086/4659-woodgreen-drive-west-vancouver",
+  "imagesSaved": 38,
+  "imagesDirectory": "./data/properties/28891086/images/"
+}
